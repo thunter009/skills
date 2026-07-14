@@ -1,0 +1,32 @@
+{"prompt": "refactor the auth module", "category": "code"}
+{"prompt": "debug why the login endpoint 500s", "category": "code"}
+{"prompt": "fix the bug in the payment flow", "category": "code"}
+{"prompt": "simplify this codebase's error handling", "category": "code"}
+{"prompt": "there's a race condition in the queue worker", "category": "code"}
+{"prompt": "run the tests and fix anything red", "category": "testing"}
+{"prompt": "add pytest coverage for the parser", "category": "testing"}
+{"prompt": "the pre-commit hooks keep failing on lint", "category": "testing"}
+{"prompt": "why is this e2e suite flaky", "category": "testing"}
+{"prompt": "search for react server component best practices", "category": "web"}
+{"prompt": "research LLM eval frameworks and summarize", "category": "web"}
+{"prompt": "crawl the docs site and save it locally", "category": "web"}
+{"prompt": "extract the pricing table from this url", "category": "web"}
+{"prompt": "create a linear ticket for the onboarding bug", "category": "pm"}
+{"prompt": "triage my todoist inbox", "category": "pm"}
+{"prompt": "groom the backlog and pick the next task", "category": "pm"}
+{"prompt": "sync the beads with linear", "category": "pm"}
+{"prompt": "deploy to production", "category": "release"}
+{"prompt": "open a pull request and get it merged", "category": "release"}
+{"prompt": "ship this feature branch", "category": "release"}
+{"prompt": "squash the PR and land it on dev", "category": "release"}
+{"prompt": "set up the dev environment on the new laptop", "category": "infra"}
+{"prompt": "bootstrap the toolchain and install dependencies", "category": "infra"}
+{"prompt": "add an AGENTS.md with repo standards", "category": "infra"}
+{"prompt": "configure the mcp server and hooks", "category": "infra"}
+{"prompt": "de-slopify the launch announcement", "category": "docs"}
+{"prompt": "write up the architecture doc for the pipeline", "category": "docs"}
+{"prompt": "polish the readme prose", "category": "docs"}
+{"prompt": "log this session to the journal", "category": "meta"}
+{"prompt": "check skill health and refine the weak ones", "category": "meta"}
+{"prompt": "import this recipe into mealie", "category": "home"}
+{"prompt": "add a recipe for chicken curry to the recipe manager", "category": "home"}

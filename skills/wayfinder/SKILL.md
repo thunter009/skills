@@ -16,7 +16,7 @@ category: pm
 
 # Wayfinder
 
-A loose, ambitious idea has arrived — too big for one agent session, wrapped in fog: the way from here to the **destination** isn't visible yet. Wayfinding is about finding that way, not charging at the destination. This skill charts the way as a **map of decision tickets in beads**, then resolves them one at a time until the route is clear — at which point you **hand off to execution** ([`route-build-mode`](../route-build-mode/SKILL.md) / [`swarm-start`](../swarm-start/SKILL.md) / [`swarm-build`](../swarm-build/SKILL.md)).
+A loose, ambitious idea has arrived — too big for one agent session, wrapped in fog: the way from here to the **destination** isn't visible yet. Wayfinding is about finding that way, not charging at the destination. This skill charts the way as a **map of decision tickets in beads**, then resolves them one at a time until the route is clear — at which point you **hand off to execution** (`route-build-mode` / [`swarm-start`](../swarm-start/SKILL.md) / `swarm-build`).
 
 **This is a planning skill, not a competing planner.** It ends where those skills begin: it produces a resolved set of decisions, not the deliverable. The pull to just do the work is usually the signal you've reached the edge of the map — time to hand off.
 
@@ -87,12 +87,12 @@ The map is deliberately incomplete — don't chart what you can't yet see. Beyon
 3. Resolve it — zoom into related/closed tickets on demand (`br show <id>`); invoke the skills the Notes block names; default to `grilling` + `domain-modeling`.
 4. Record: post the answer with `br comments <id> add`, `br close <id>`, and append a one-line pointer to the map's Decisions-so-far.
 5. Graduate any fog the answer sharpened into new tickets (create-then-wire); if the answer reveals a ticket sits beyond the destination, rule it out of scope (close it, one line under Out-of-scope) rather than resolving it.
-6. **When the frontier is empty and no fog remains, the map is done** — the route is clear. Hand off to [`route-build-mode`](../route-build-mode/SKILL.md) to pick execution mode, then the relevant build skill. Don't roll into building inside the same session.
+6. **When the frontier is empty and no fog remains, the map is done** — the route is clear. Hand off to `route-build-mode` to pick execution mode, then the relevant build skill. Don't roll into building inside the same session.
 
 Remember to `br sync --flush-only && git add .beads/ && git commit` so the map and tickets are shared.
 
 ## Related skills
 
 - [`grilling`](../grilling/SKILL.md) / [`domain-modeling`](../domain-modeling/SKILL.md) — the resolution loop for most tickets.
-- [`route-build-mode`](../route-build-mode/SKILL.md) — the handoff target once the route is clear.
+- `route-build-mode` — the handoff target once the route is clear.
 - [`beads-linear-sync`](../beads-linear-sync/SKILL.md) — mirror the map to Linear if humans need a UI.

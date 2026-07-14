@@ -24,7 +24,7 @@ related-skills:
 > obvious ones were hiding. The third catches what you broke fixing the first two. Quality
 > comes from passes, not from one heroic edit. Stop when a pass yields nothing material — not at a fixed count.
 
-This is the general-artifact sibling of code-specific [`multi-pass-bug-hunting`](../multi-pass-bug-hunting/SKILL.md) and tracker-specific [`polish-beads`](../polish-beads/SKILL.md). Use it on anything written: a proposal, a plan, a README, an essay, a spec, an architecture doc.
+This is the general-artifact sibling of code-specific `multi-pass-bug-hunting` and tracker-specific `polish-beads`. Use it on anything written: a proposal, a plan, a README, an essay, a spec, an architecture doc.
 
 ## When To Use
 
@@ -95,7 +95,7 @@ Do **not** keep going to hit a round number. Five is a ceiling, not a quota.
 
 Works on: proposals, plans, PRDs, READMEs, design docs, essays, emails, postmortems, ADRs. For each, the critique lens shifts (a PRD critique weighs acceptance-criteria completeness; an essay critique weighs argument and flow) — the loop structure is identical.
 
-For a final-pass language cleanup, chain [`de-slopify`](../de-slopify/SKILL.md) (AI-writing artifacts) or the `humanizer` skill after convergence.
+For a final-pass language cleanup, chain `de-slopify` (AI-writing artifacts) or the `humanizer` skill after convergence.
 
 ## Anti-Patterns
 
@@ -107,7 +107,7 @@ For a final-pass language cleanup, chain [`de-slopify`](../de-slopify/SKILL.md) 
 
 ## Related
 
-- [`multi-pass-bug-hunting`](../multi-pass-bug-hunting/SKILL.md) — same audit-fix-rescan philosophy, for code.
-- [`polish-beads`](../polish-beads/SKILL.md) — iterative passes specialized to beads/Linear issues/plans.
+- `multi-pass-bug-hunting` — same audit-fix-rescan philosophy, for code.
+- `polish-beads` — iterative passes specialized to beads/Linear issues/plans.
 - [`multi-round-research`](../multi-round-research/SKILL.md) — produces the proposal this loop then hardens.
-- [`de-slopify`](../de-slopify/SKILL.md) — final-pass AI-writing cleanup.
+- `de-slopify` — final-pass AI-writing cleanup.

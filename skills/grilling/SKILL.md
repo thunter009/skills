@@ -38,4 +38,4 @@ If the grilling surfaces fuzzy or conflicting *terminology* — two words for on
 
 - [`domain-modeling`](../domain-modeling/SKILL.md) — capture the shared language a grill surfaces.
 - [`idea-wizard`](../idea-wizard/SKILL.md) / [`design`](../design/SKILL.md) — broader idea-funnel and fuzzy-to-build-ready flows that include an interview step of their own; grilling distils that step into a standalone loop.
-- [`decision-canvas`](../decision-canvas/SKILL.md) — when `ATRIUM=1` and the decision set exceeds a conversational grill (many questions needing evidence to judge).
+- `decision-canvas` — when `ATRIUM=1` and the decision set exceeds a conversational grill (many questions needing evidence to judge).

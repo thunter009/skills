@@ -69,7 +69,23 @@ references.
 
 - **Navigation/selection**: the Name Box input (`#t-name-box`) accepts a
   cell (`A1`), a range (`CA2:CL233`), or a whole-column reference (`H:CA`).
-  Fill it and press Enter to jump/select.
+  Fill it and press Enter to jump/select. **Name Box navigation can fail
+  silently**: the box shows the typed reference but Enter doesn't commit,
+  and the selection stays where it was. Always verify the active cell
+  after navigating (active-cell border position on a screenshot, or read
+  the Name Box back) **before** pasting or typing — a paste after a
+  silently-failed jump lands on the wrong cells with no error.
+- **Clipboard is NOT available to CDP-synthesized keystrokes in
+  embedded/webview browser panes** (no transient user activation):
+  Cmd+C/Cmd+V across documents silently no-op. The workaround that works:
+  build a TSV string in the page, then dispatch a synthetic
+  `ClipboardEvent('paste')` carrying a `DataTransfer` with `text/plain`
+  TSV at Sheets' hidden paste receiver. In current Sheets that receiver
+  is `DIV.cell-input.editable` (the classic `.docs-texteventtarget-iframe`
+  may be absent). `dispatchEvent` returning `false` (preventDefault) means
+  Sheets consumed the paste. The paste lands at the active cell and
+  auto-selects the pasted extent — verify the extent, and check the
+  status-bar Sum of the selection against a known source-of-truth sum.
 - **Keyboard input**: use CDP `Input.dispatchKeyEvent` with paired
   `keyDown`/`keyUp` events, not a synthetic `KeyboardEvent` dispatched via
   `eval()` — Sheets' key handlers require a trusted event and ignore
@@ -110,6 +126,10 @@ references.
      zoom/scroll states.
   3. On the success dialog, click "Done".
 - The copied tab lands named "Copy of `<original name>`" in the destination.
+- **"Copy to" preserves tab colors.** To replicate a source sheet's color
+  scheme on tabs you rebuilt by hand, read the source colors from the
+  tab-strip DOM (`.docs-sheet-tab-color` element style), then apply via
+  tab context menu → Change color → Custom with the hex value.
 - **Formulas inside a copied tab still reference tab names, not the tabs
   you actually copied.** After the copy, they re-bind to any same-named tab
   that already exists in the destination spreadsheet (which may be the
@@ -136,11 +156,35 @@ references.
   `null`. For async work, kick off an IIFE that writes its result to a
   `window` variable, then poll that variable in a later, separate `eval`
   call.
+- **Small dialog inputs (e.g. color-picker hex fields) can hold stale
+  internal state after `fill`/bulk `type`**: the field displays the right
+  hex but commits the old RGB. Prefer individual real keypresses with
+  small sleeps for these inputs, and ALWAYS verify the resulting color
+  (e.g. read the tab color back from `.docs-sheet-tab-color`
+  `backgroundColor`) rather than trusting what the dialog shows.
 - A lone `#REF!` in a single header cell is often just a blocked
   `=image("https://...")` logo fetch behind Sheets' "Allow access to
   external data" banner — cosmetic, not a real reference error. **Never
   click "Allow"/"Request access" on the user's behalf** — that's a
   permission decision for the human account owner.
+
+## Delegating this work to sub-agents
+
+Two recurring failure modes observed in production browser-automation
+sub-agents:
+
+- **Stream-watchdog kills**: a single shell call that chains long sleeps
+  gets killed mid-action. Keep every call under ~60s and take screenshots
+  in separate calls.
+- **Turn ends with no armed waker**: an agent that ends its turn "waiting
+  for CI / a pane / a page" with nothing armed never resumes. Rule: before
+  ending a turn to wait on external state, arm an explicit Monitor/wakeup.
+  If a pane or page dies mid-task, re-list panes and re-instantiate (in
+  atrium, a `workspace switch` re-creates dead webviews after an app
+  restart) rather than polling a dead handle.
+- **An interrupted agent's work may be MORE complete than its last message
+  suggests** — re-inspect live state before redoing anything (a killed
+  transplant session had actually finished all four transplants).
 
 ## Tiller Money migration
 

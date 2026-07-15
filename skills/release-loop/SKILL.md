@@ -1,6 +1,6 @@
 ---
 name: release-loop
-description: Arm a self-pacing release loop that cuts an immutable release branch and opens a release PR on a velocity-gated cadence.
+description: Arm a self-pacing release loop that cuts a release branch (snapshot or cherry-pick) off dev and opens a release PR on a velocity-gated cadence.
 when-to-use:
 - release loop, release cadence, release every N hours
 - "set up a loop to release every 4-6 hours"
@@ -30,27 +30,47 @@ A fixed 4h cron releases three times on a quiet Sunday and once during a busy af
 
 Busy periods hit the commit threshold and release at ~4h. Quiet periods drift to 6h+ or skip entirely. One knob, both behaviors.
 
-## Cut an immutable release branch — do NOT promote dev→main
+## Do NOT promote dev→main. Cut a release branch off dev, PR that to main.
 
 This is the load-bearing design decision, and getting it wrong produces a loop that **can never release**.
 
-The obvious design is "run `/release`, promote `dev → main`." It doesn't work in an active repo, for a reason that only shows up in production:
+The obvious design is "run `/release`, promote `dev → main`." It doesn't work in an active repo:
 
 - `/release` **stops** when any PR targets the integration branch — correctly, because promoting typically **recreates or force-moves `dev`** (auto-delete-on-merge, force-push sync), which **retargets or orphans** every open PR against it.
 - In any repo with real throughput, `dev` is *never* free of open PRs. New ones arrive faster than they land.
 
-So the promotion can never run. Field data from the loop that motivated this skill: three consecutive ticks released nothing while the backlog grew to 50 commits, and during a single tick the open-PR count went **up**, 4 → 5, with three PRs opened within ten minutes of each other. That is a treadmill, not a queue — grinding harder on the PR backlog does not converge.
+So the promotion can never run. Field data: three consecutive ticks released nothing while the backlog grew to 50 commits, and during a single tick the open-PR count went **up**, 4 → 5, with three PRs opened within ten minutes. A treadmill, not a queue.
 
-**Instead, snapshot and PR the snapshot:**
+Instead the loop cuts a release branch that does **not** move `dev`, and PRs *that* to `main`. Two forms, and which one you need depends on whether `dev` still descends from `main`:
+
+### Form 1 — snapshot (when `dev` descends from `main`)
 
 ```bash
 AGENT_NAME=release-loop git push origin origin/dev:refs/heads/release/$(date +%Y-%m-%d)
-gh pr create --base main --head "release/$(date +%Y-%m-%d)" ...
 ```
 
-A pure ref push — no checkout, no rebase, nothing touches the shared working tree. `dev` is never recreated, so open dev PRs are completely unaffected, and **releasing stops depending on PR churn entirely.**
+A pure ref push — no checkout, nothing touches the shared tree. Simple and clean **as long as `git merge-base --is-ancestor origin/main origin/dev` is true.**
 
-Release branches are **immutable**: if one already exists for today, cut `-2`, `-3`, … rather than force-moving it. A release branch that moves under a reviewer is the same class of bug as recreating `dev`.
+### Form 2 — cherry-pick (when `dev` has DIVERGED from `main`)
+
+The snapshot has one fatal precondition: `dev` must descend from `main`. **The instant someone merges a `dev→main` promotion, that breaks** — the promotion rebase-replays most of dev's history onto `main` under *new* SHAs, so `dev` and `main` now share content but not ancestry. A snapshot of dev's tip then conflicts against `main` on all that duplicated content, and **every future snapshot conflicts too** until `dev` is realigned. This is not hypothetical — it happened (releases #928 and #942, both cut as snapshots, both `CONFLICTING`; `git cherry` showed 67 of dev's 69 commits were already on `main` by content).
+
+The realign-`dev` fix (rebase dev onto main, force-with-lease) is usually **wrong** for a hot integration branch: a live swarm's SHAs churn constantly, a force-move races their pushes and forces every open PR to rebase. Instead, make the release **content-addressed** — pick only what's genuinely new:
+
+```bash
+# in a PRIVATE worktree cut from origin/main (never the canonical checkout):
+git worktree add .ntm/worktrees/cp-$(date +%F) origin/main
+cd .ntm/worktrees/cp-$(date +%F) && git switch -c release/$(date +%Y-%m-%d)
+ORDER=$(git rev-list --reverse --right-only --cherry-pick origin/main...origin/dev)  # genuinely-new, oldest→newest
+git cherry-pick $ORDER
+git merge-tree $(git merge-base HEAD origin/main) HEAD origin/main | grep -c '^<<<'   # must be 0
+```
+
+`git cherry` / `--cherry-pick` compare by **patch-id (content), not SHA**, so this is immune both to the divergence *and* to dev's SHA churn — it snapshots the genuinely-new *content* at cut time, no matter how many times the swarm rebased dev underneath. It never force-moves `dev`, so the swarm and the open dev PRs are untouched. This is the mechanism to reach for whenever `dev` is a busy shared branch; Form 1 is just its degenerate case when ancestry is intact.
+
+Release branches are **immutable** in both forms: if one exists for today, cut `-2`, `-3`, … rather than force-moving it.
+
+**Push the branch ref from the canonical checkout, not the worktree** — a fresh worktree has no virtualenv, so a pre-push hook that runs the test suite (`pytest`) fails to spawn. `git push origin release/<date>:refs/heads/release/<date>` from canonical uses the real env.
 
 ## No ship pass — let the PR owners merge their own work
 

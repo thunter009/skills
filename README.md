@@ -53,7 +53,7 @@ Install with [skills](https://github.com/vercel-labs/skills): `npx skills add th
 | [`reality-check`](skills/reality-check/SKILL.md) | Check whether a swarm is busy but not converging on the goal. |
 | [`refactor`](skills/refactor/SKILL.md) | Refactor code with scoped cleanup and safer structure changes. |
 | [`refine-skill`](skills/refine-skill/SKILL.md) | Mine CASS sessions and rewrite a skill based on real usage. |
-| [`release-loop`](skills/release-loop/SKILL.md) | Arm a self-pacing release loop that cuts an immutable release branch and opens a release PR on a velocity-gated cadence. |
+| [`release-loop`](skills/release-loop/SKILL.md) | Arm a self-pacing release loop that cuts a release branch (snapshot or cherry-pick) off dev and opens a release PR on a velocity-gated cadence. |
 | [`ritual-detection`](skills/ritual-detection/SKILL.md) | Mine CASS for repeated prompts that should become new skills. |
 | [`roadmap-review`](skills/roadmap-review/SKILL.md) | Review and sync roadmap docs against tracker reality. |
 | [`ship`](skills/ship/SKILL.md) | 'Run the full landing workflow: sync, test, split commits, and open a PR.' |

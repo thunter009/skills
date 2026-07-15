@@ -76,6 +76,17 @@ with trimming history:
    one — not the formulas, which would re-break against the new sheet's
    (different) `Budget Builder` tab or lack one entirely.
 
+When the source formulas reference an un-ported tab (`Budget Builder`),
+the numbers **must** be copied from the OLD sheet where they evaluate:
+extract them via htmlview using header-text column mapping, then
+synthetic-paste (see the parent skill's clipboard-free paste technique)
+into the new sheet. Capture the old sheet's status-bar Sum for the range
+**beforehand** and verify the pasted range's Sum against it.
+
+Leave a cell NOTE on the first month header documenting the original
+formula pattern and the source sheet URL. Check for a pre-existing note
+first and **append** to it rather than overwriting.
+
 ## Simultaneous feeds during cutover
 
 Both the old and new sheets can receive live feed updates at the same time

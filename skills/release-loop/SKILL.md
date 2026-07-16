@@ -61,12 +61,27 @@ The realign-`dev` fix (rebase dev onto main, force-with-lease) is usually **wron
 # in a PRIVATE worktree cut from origin/main (never the canonical checkout):
 git worktree add .ntm/worktrees/cp-$(date +%F) origin/main
 cd .ntm/worktrees/cp-$(date +%F) && git switch -c release/$(date +%Y-%m-%d)
-ORDER=$(git rev-list --reverse --right-only --cherry-pick origin/main...origin/dev)  # genuinely-new, oldest→newest
-git cherry-pick $ORDER
+# Pick ONE COMMIT AT A TIME, redirecting from a file — NOT a pipe, NOT `cherry-pick $ORDER`:
+git rev-list --reverse --right-only --cherry-pick origin/main...origin/dev > /tmp/rl_order.txt
+conflict=""
+while IFS= read -r sha; do
+  git cherry-pick "$sha" || { conflict="$sha"; git cherry-pick --abort; break; }
+done < /tmp/rl_order.txt
+if [ -n "$conflict" ]; then
+  echo "CONFLICT on $conflict — aborting release"
+  cd - && git worktree remove --force .ntm/worktrees/cp-$(date +%F); exit 0   # report + END, push nothing
+fi
 git merge-tree $(git merge-base HEAD origin/main) HEAD origin/main | grep -c '^<<<'   # must be 0
 ```
 
 `git cherry` / `--cherry-pick` compare by **patch-id (content), not SHA**, so this is immune both to the divergence *and* to dev's SHA churn — it snapshots the genuinely-new *content* at cut time, no matter how many times the swarm rebased dev underneath. It never force-moves `dev`, so the swarm and the open dev PRs are untouched. This is the mechanism to reach for whenever `dev` is a busy shared branch; Form 1 is just its degenerate case when ancestry is intact.
+
+**Cherry-pick one commit at a time — but redirect the loop from a file, not a pipe, and not `git cherry-pick $ORDER`.** Two traps stack here:
+
+- `git cherry-pick $ORDER` (collect SHAs in a var, expand unquoted) assumes the shell word-splits on newlines. Interactive `zsh` does **not** split an unquoted parameter expansion, so it passes all SHAs as a *single* argument and dies with `fatal: ambiguous argument`.
+- `git rev-list … | while read sha; do …; done` runs the loop body in a **pipeline subshell**. A conflict handler that does `exit` there exits only the subshell — the outer script keeps going to the verify + push steps and can push a *partially* cherry-picked branch (the already-applied commits are internally clean, so the `merge-tree` conflict check passes on the partial set and hides the abort). Redirect from a file instead (`done < /tmp/order.txt`): the loop then runs in the current shell, so `break` + a `conflict` flag actually stop the release, and you can clean up the worktree before ending.
+
+Recompute the list against **current** `origin/main` right before picking — in a busy repo a release can fire and `dev` can rebase during your setup, desyncing a list captured a few seconds earlier.
 
 Release branches are **immutable** in both forms: if one exists for today, cut `-2`, `-3`, … rather than force-moving it.
 

@@ -72,6 +72,18 @@ they got linked to something true**.
 Hand-mapping is the reliable path: source wording verbatim, prep modifiers in `note`,
 `quantity`/`unit`/`food` set deliberately.
 
+**The safest write mode is free-text `note` only — use it whenever you can.**
+A URL import lands with **every row unstructured**: `quantity=0`, `unit=null`, `food=null`,
+the whole line in `note`, and `display` just mirroring `note`. In that state you can rewrite
+`note` freely — convert units, simplify names, split "salt and pepper" into two rows,
+annotate with grams — and `display` renders exactly what you wrote. This bypasses traps 1,
+3, and 4 entirely: no derived pluralization, no parser, no food/unit entities. Only reach
+for structured `quantity`/`unit`/`food` when the recipe genuinely needs machine-readable
+scaling or a shopping-list mapping; for human-readable edits, editing `note` is both safer
+and simpler. (Splitting a row = append a new ingredient object with a fresh `referenceId`;
+reuse existing `referenceId`s on rows you keep, or you break any `ingredientReferences` in
+the steps.)
+
 **4. Foods and units are entities, referenced by ID.**
 `{"id": null, "name": "..."}` is rejected on PUT. Look up the real record (or `POST` to
 create it) and embed that object. Beware: an ingredient's *text* can end up living inside
@@ -139,8 +151,25 @@ for i in g:
 
 If wrapped, extract `textValue` yourself and PUT the rows.
 
+**Before extracting by hand, look for the upstream original.** Aggregator links (Instacart
+especially) usually wrap a real recipe site and carry it in the URL — a `?referer=` param,
+a canonical link, or the user can point you at it. Importing *that* URL (e.g. the NYT Cooking
+page an Instacart link came from) yields clean schema.org rows with zero repair work. Try the
+source before doing surgery on the aggregator's wrapped payload.
+
 ## Verify, always
 
 `display` is derived and PUTs fail quietly. After every write, `GET` the recipe back and
 print the rendered rows. A fix that "looks applied" often isn't — matching on a *displayed*
 name ("peppers") when the stored food is `pepper` is a real failure mode.
+
+## Read the steps before editing them
+
+Trap 5's lesson — a shape/keyword heuristic cannot identify the right target — applies to
+`recipeInstructions`, not just foods. Picking a step by keyword (`"salmon" + "cook"`) and
+appending method-dependent guidance corrupted a real recipe: the note said "sear skin-side
+down" on a step that actually **steams** the fish under a lid, so the instruction
+contradicted itself. Before writing anything method-dependent (a technique note, a timing
+tweak, adding/reordering steps), `GET` and read the full `recipeInstructions` text and
+confirm what each step actually does. Never let a regex choose which step to edit, and never
+assume a recipe's method from its title — read it.

@@ -180,6 +180,7 @@ classify_one() {
   [[ $prompt =~ agents\.md ]]                     && add_alias agents-md infra
   [[ $prompt =~ (^|[^a-z])de-?slop ]]             && add_alias de-slopify docs
   [[ $prompt =~ (^|[^a-z])mealie([^a-z]|$) ]]     && add_alias mealie home
+  [[ $prompt =~ process\ porn|reward\ hack|(^|[^a-z])ceremony([^a-z]|$) ]] && add_alias just-say-no-to-process-porn-and-ceremony meta
 
   local best_cat="" best_n=0 second_n=0 total_hits=0 cat n
   for cat in $CATEGORIES; do

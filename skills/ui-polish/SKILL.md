@@ -10,6 +10,8 @@ permissions:
 category: testing
 related-skills:
 - playwright-cli
+- better-interface
+- interface-review
 ---
 
 # /ui-polish
@@ -24,6 +26,10 @@ Core functionality must be working. This skill targets polish, not correctness. 
 
 **How to see the UI:** Use `playwright-cli` to take screenshots and interact with the app. If a dev server isn't running, start one first. See the playwright-cli skill for command reference.
 
+**Rulebook:** Load the `better-interface` skill (jakubkrehel/skills collection) — it routes to the six `better-*` domain skills: ui, typography, colors, layout, accessibility, writing. Grade findings against those concrete rules and cite the rule when suggesting a change. Compressed public version: https://interfaces.dev/cheat-sheet.
+
+**Scope check:** Polishing a specific diff, branch, or PR rather than a running app? Use `/interface-review` instead — it resolves change scope and hands the domain review to `better-interface`.
+
 ## Step 1: General Scrutiny
 
 Examine every aspect of the application workflow and implementation. Look for:
@@ -36,6 +42,7 @@ Examine every aspect of the application workflow and implementation. Look for:
 - Interactions that feel laggy or jarring
 - Visual hierarchy problems (what draws the eye vs what should)
 - Accessibility gaps (contrast, focus states, screen reader support)
+- Violations of the `better-*` rulebook (concrete CSS, a11y, and copy rules)
 
 Target quality: Stripe-level apps. Ultra high quality, polished, premium.
 

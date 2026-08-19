@@ -16,7 +16,7 @@ related-skills:
 - polish-beads
 ---
 
-<!-- TOC: Core | When To Use | THE EXACT PROMPT | The Loop | Pass Anatomy | Convergence | Artifact Types | Anti-Patterns | Related -->
+<!-- TOC: Core | When To Use | THE EXACT PROMPT | The Loop | Pass Anatomy | Convergence | Dual-Model Variant | Artifact Types | Anti-Patterns | Related -->
 
 # Iterative Critique / Polish Loop
 
@@ -90,6 +90,17 @@ Stop on the **first** of:
 - A pass proposes only new scope, not fixes — that's drift, not improvement; stop.
 
 Do **not** keep going to hit a round number. Five is a ceiling, not a quota.
+
+## Dual-Model Variant (cross-model grooming)
+
+For high-stakes plans/specs, replace the single self-critic with **two independent high-effort reviewers from different model families** (e.g. a Claude subagent + `codex exec` at high/xhigh reasoning), then integrate. Proven shape (2026-07-21, a private data-platform repo's user-docs spec — each reviewer found real defects the other missed):
+
+1. **One shared brief, run twice in parallel.** Same context bundle (the artifact + the docs/beads/code it must stay consistent with), same hard constraints (settled decisions listed as non-negotiable), same strict output format: a unified **git diff against the artifact** + a ranked rationale list. The diff format forces concrete, appliable proposals instead of essay-critique.
+2. **Integrate as a skeptic, not a merger.** Before applying any hunk, **verify its factual claims against the codebase/source of truth** — reviewers confidently cite params, file paths, and behaviors that may be wrong (correspondence over coherence). Reject constraint-violating hunks outright.
+3. **Publish a verdict ledger**: wholeheartedly agree / somewhat agree (applied modified) / disagree (rejected, with reason) — per proposal, in the final summary. This keeps the human able to audit your integration judgment cheaply.
+4. **Then run the standard equilibrium loop** (this skill's main prompt) on the *integrated* artifact — integration itself introduces seam errors (era mismatches, half-applied renames, contradictory guardrails), and the passes after integration are where they surface.
+
+Cost: ~2× a single review. Worth it when the artifact gates a build (spec, PRD, migration plan); skip for low-stakes prose.
 
 ## Artifact Types
 

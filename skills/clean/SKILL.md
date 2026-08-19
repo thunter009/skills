@@ -38,6 +38,30 @@ A five-phase end-of-work sweep. Each phase is a checkpoint: run it, report, move
 
 - Register with Agent Mail if the repo uses it — mutating ops follow.
 
+## Phase 0 — Bead state, in every repo this session touched
+
+A `br close` reaches origin only if the resulting `.beads/issues.jsonl` change is both
+committed and pushed. Two ways it silently is not (bd-1x5s, 3+ occurrences): it is never
+committed — sitting in `git status` beside foreign modified files while closeout attention
+goes to a different repo — or it is committed onto a local integration branch that has
+diverged from its upstream and never leaves the machine.
+
+```bash
+bash ~/.claude/skills/clean/scripts/check-dirty-beads.sh <repo> [<repo> ...]
+```
+
+Pass every repo the session touched, not only the current one — the 2026-08-05 loss was in
+the second repo. Non-zero exit names the repo and the reason. **Never `br close` and commit
+onto a stale local `dev`** — close in a fresh worktree off the integration branch instead:
+
+```bash
+git worktree add .ntm/worktrees/close-beads -b chore/close-beads origin/dev
+cd .ntm/worktrees/close-beads && br close <ids> && br sync --flush-only
+git diff -- .beads/            # ONLY the intended beads
+git add .beads/ && git commit -m 'chore(beads): close <ids>'
+git push -u origin HEAD && gh pr create --base dev   # then merge
+```
+
 ## Phase 1 — Land genuine unpushed work
 
 The path depends on the shared-checkout check above.
@@ -183,6 +207,7 @@ Close with a per-phase summary table:
 
 | Phase | Result |
 |---|---|
+| 0 Bead state | clean / stranded closes in `<repo>` |
 | 1 Land work | pushed N commits / nothing to land |
 | 2 Squash PRs | merged #N… / no open PRs |
 | 3 Prune | deleted N branches, M worktrees |
@@ -191,6 +216,8 @@ Close with a per-phase summary table:
 
 ## Guardrails
 
+- **A green code ship is not a green bead ship.** Run Phase 0 before you declare the
+  session done, in every repo touched.
 - **In a shared checkout, classify before you commit.** A diff is not always unlanded
   work; an "ahead" commit is not always unique. Blob-compare and `patch-id` first.
 - **Never force-push** a shared branch; **never move a branch pointer** sister sessions

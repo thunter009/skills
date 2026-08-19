@@ -19,6 +19,7 @@ Workflow for reviewing and organizing a cluttered Todoist inbox into the right p
 - `td` CLI installed and authenticated (see `todoist` skill)
 - Tavily extract available at `~/.claude/skills/extract/scripts/extract.sh`
 - `bird` CLI for tweet extraction (optional, falls back to title inference)
+- `social-fetch` skill for non-X social URLs — LinkedIn, Instagram, TikTok, Reddit, HN, Bluesky, Mastodon, Threads (optional)
 
 ## Workflow
 
@@ -51,7 +52,7 @@ With titles AND descriptions in hand, group into categories:
 | **Actionable tasks** | No URL, describes work to do |
 | **GitHub repos** | `github.com` URL |
 | **Articles** | Blog/docs URL (not social media) |
-| **Tweets/social** | `x.com` or `twitter.com` URL |
+| **Tweets/social** | `x.com`/`twitter.com`, LinkedIn, Instagram, TikTok, Reddit, HN, Bluesky, Mastodon, or Threads post URL |
 | **Other bookmarks** | Any other URL |
 
 ### 4. Extract content for context
@@ -76,6 +77,8 @@ bird read <tweet-id> --plain
 Batch tweet reads: `for id in ID1 ID2 ...; do bird read "$id" --plain; done`
 
 If `bird` is not available, fall back to inferring topic from the tweet author name and visible title text.
+
+**For other social platforms** (LinkedIn, Instagram, TikTok, Reddit, HN, Bluesky, Mastodon, Threads): Tavily also fails on most of these. Invoke the `social-fetch` skill if installed — it returns normalized author/text/engagement JSON via a free-first strategy chain (public APIs → browser → Wayback). If `social-fetch` is not installed, fall back to inferring topic from the URL slug, author handle, and visible title text — same as the no-`bird` tweet fallback.
 
 ### 5. Present categorized summary
 

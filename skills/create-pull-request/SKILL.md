@@ -152,14 +152,25 @@ When filling out the template:
 
 ### Create PR with gh CLI
 
+Write the body to a file and pass `--body-file`. A multi-line body inlined as
+`--body "$(cat <<'EOF' … EOF)"` is blocked by `dcg`
+(`heredoc.posix:eval-dynamic` — "POSIX command substitution dynamically
+assembles a shell launcher"), so on any machine running dcg that form fails at
+the last step, after the branch is already pushed.
+
 ```bash
-gh pr create --title "PR_TITLE" --body "PR_BODY" --base "$BASE"
+# Write the body first (Write tool, or a heredoc to a literal path)
+gh pr create --title "PR_TITLE" --body-file /tmp/pr-body.md --base "$BASE"
 ```
 
 Alternatively, create as draft if the user wants review before marking ready:
 ```bash
-gh pr create --title "PR_TITLE" --body "PR_BODY" --base "$BASE" --draft
+gh pr create --title "PR_TITLE" --body-file /tmp/pr-body.md --base "$BASE" --draft
 ```
+
+Same shape elsewhere: `br comments add <id> -f <file>`, `br create
+--description-file <file>`, `gh pr comment --body-file <file>`. Prefer a file
+flag over command substitution whenever the payload is multi-line.
 
 ## Post-Creation
 

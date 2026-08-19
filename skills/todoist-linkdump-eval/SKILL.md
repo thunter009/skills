@@ -19,7 +19,8 @@ Raw URLs captured as Todoist tasks (X posts, GitHub repos, articles) are the sin
 
 - `td` CLI authenticated (see `todoist` skill)
 - Tavily extract script: `~/.claude/skills/extract/scripts/extract.sh '{"urls":["..."]}'` (batch up to 20 URLs/call)
-- For X/Twitter links: xbird MCP tools (`get_tweet`, `get_thread`) if available; else extract.sh; mark unscrapable links honestly
+- For X/Twitter links: xbird MCP tools (`get_tweet`, `get_thread`) if available; else `bird read <id> --plain`; else extract.sh
+- For other social links (LinkedIn, Instagram, TikTok, Reddit, HN, Bluesky, Mastodon, Threads): `social-fetch` skill — normalized author/text/engagement JSON, free-first strategy chain. Reddit's free `.json` endpoint often 403s from residential IPs; Tavily extract.sh is a valid fallback there. Mark unscrapable links honestly
 
 ## Workflow
 

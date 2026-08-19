@@ -114,6 +114,12 @@ Template:
 
 If a section can't be filled from description content, **omit the section** rather than padding. A 5-section prompt with real content beats an 8-section prompt with `<placeholder>`.
 
+**Prompt-shape rules** (empirical, Cursor research 2026-07 — shape every generated prompt this way):
+- **Constraints beat instructions**: "no TODOs, no partial implementations, never weaken a failing gate" outperforms "remember to finish".
+- **Numeric ranges beat vague scope**: if the task involves generating/enumerating (tasks, tests, findings), give a range ("add 5–15 test cases"), never "add tests" or "several".
+- **Acceptance is the floor, not the ceiling**: the checklist defines done; repo quality gates and obvious adjacent correctness still apply even though unlisted. Say so when acceptance is sparse.
+- **Exit conditions, never pressure**: keep the "Done =" endpoint concrete; never emit "keep working until done" / "do not stop" phrasing — it measurably increases faked passes and weakened tests.
+
 #### "Why now" computation recipe
 
 The single hardest field to do well — drives whether the prompt feels urgent or ignorable. Combine three sources:
@@ -161,18 +167,23 @@ td task update "$id" --description "$new_desc"
 
 **Caveats:**
 - `td task update --description` REPLACES, not appends. Always read existing first, concat, then write.
-- Use heredoc form for multi-line descriptions to avoid `$` expansion + quote escaping issues:
+- For multi-line descriptions, write the text to a file first, then substitute the
+  file (avoids `$` expansion + quote escaping issues):
   ```bash
-  td task update "$id" --description "$(cat <<'EOF'
+  cat > /tmp/desc.md <<'EOF'
   <existing description>
-  
+
   ---
-  
+
   ## Kickoff Prompt
   <prompt body>
   EOF
-  )"
+
+  td task update "$id" --description "$(cat /tmp/desc.md)"
   ```
+  Do NOT inline the heredoc inside the substitution (`--description "$(cat <<'EOF' ... EOF)"`).
+  `dcg` blocks that form (`heredoc.posix:eval-dynamic`) — it cannot statically parse a
+  dynamically assembled launcher. `$(cat <file>)` on its own is fine.
 - If description already contains `## Kickoff Prompt`, **replace** that section in place rather than appending a second one. Skill must be idempotent — re-running on a task should refresh, not duplicate.
 
 #### Idempotency: stripping an existing kickoff section before appending

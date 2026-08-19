@@ -279,3 +279,12 @@ Keep it declarative — one fact per line — so any skill can parse it instead 
 - Subjective style preferences without enforcement (use linter configs instead)
 - Lengthy tutorials; link to docs instead
 - Anything already in CLAUDE.md or .cursorrules (reference those files instead of duplicating)
+
+## Keeping It Lean (Maintenance)
+
+AGENTS.md accretes: agents append dated session lessons, tool-injected boilerplate grows, and facts rot as the repo moves (field-tested: one repo hit 235 lines — 40 of dated lesson dumps, 100 of tool boilerplate, plus two factually stale sections — before a condense pass). When bootstrapping OR revising an AGENTS.md, install these guards:
+
+1. **Contract header** (2 lines, right under the intro): state a line budget, "durable rules only", and where non-durable content routes — dated lessons/surprises to a FIELD-GUIDE.md or equivalent, session learnings to a journal, task specifics to the issue tracker. End with "adding when full means deleting something weaker." The header travels with the file, so every agent (Claude, Codex, Gemini, Cursor) sees it at edit time.
+2. **Mechanical size guard** where the repo has pre-commit or CI: a script failing the commit when AGENTS.md exceeds the budget, with the routing guidance in the failure message. Set the budget ~1.5x current size. Prose rules only reach agents that read them; hooks reach all of them.
+3. **Route lessons, don't hoard them.** A dated "what we learned on 2026-XX-XX" list is a journal entry, not an instruction. If it changes future behavior, distill the rule (1 line, no date, no story) and drop the narrative.
+4. **Audit facts on revision.** Any pass that touches AGENTS.md should spot-check claims naming paths, env vars, scripts, or workflows against HEAD — stale facts mislead agents more than missing ones. Machine-managed blocks (e.g. `bv-agent-instructions`) can be condensed, but keep their sentinel markers so the owning tool doesn't re-inject the full text.

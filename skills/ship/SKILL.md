@@ -171,25 +171,29 @@ For each logical group:
 ```bash
 git reset HEAD  # unstage all
 git add <specific-files-for-this-group>
-git commit -m "$(cat <<'EOF'
+cat > /tmp/commit-msg.txt <<'EOF'
 <type>: <summary>
 
 <optional body — what and why, not how>
 EOF
-)"
+git commit -F /tmp/commit-msg.txt
 ```
+
+**Write the message to a file; never `-m "$(cat <<'EOF' ... EOF)"`.** `dcg`
+blocks the command-substitution form (`heredoc.posix:eval-dynamic`) because it
+assembles the shell launcher dynamically. A plain heredoc into a file is fine.
 
 Types: `feat`, `fix`, `chore`, `refactor`, `docs`, `test`
 
 **Only the final commit** gets the co-author trailer:
 
 ```bash
-git commit -m "$(cat <<'EOF'
+cat > /tmp/commit-msg.txt <<'EOF'
 <type>: <summary>
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 EOF
-)"
+git commit -F /tmp/commit-msg.txt
 ```
 
 ### Verify Each Commit
@@ -214,7 +218,7 @@ git push -u origin $(git branch --show-current)
 ### Create PR
 
 ```bash
-gh pr create --title "<type>: <summary>" --body "$(cat <<'EOF'
+cat > /tmp/pr-body.md <<'EOF'
 ## Summary
 <concise bullet points of what changed and why>
 
@@ -230,8 +234,12 @@ gh pr create --title "<type>: <summary>" --body "$(cat <<'EOF'
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
-)"
+
+gh pr create --title "<type>: <summary>" --body-file /tmp/pr-body.md
 ```
+
+**Use `--body-file`, not `--body "$(cat <<EOF ...)"`** — same `dcg` block as the
+commit message above, and it fires after the branch is already pushed.
 
 **Output the PR URL** — this is the final output the user sees.
 

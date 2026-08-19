@@ -17,9 +17,9 @@ related-skills:
 
 # Release Loop
 
-Arms a recurring job that decides *whether to release* from commit velocity, snapshots the integration branch, and leaves a release PR for a human to merge.
+Arms a recurring job that decides *whether to release* from commit velocity, snapshots the integration branch into a release PR, and — if the PR is obviously clean — merges it itself.
 
-The loop never merges to the production branch. Merging `main` is what fires release automation (semantic-release, prod deploys), so it stays an operator decision. Everything upstream of that is safe to automate.
+Merging `main` fires release automation (semantic-release, prod deploys). Whether the loop does that itself or leaves it for a human is a **policy choice** (see "Auto-merge vs stop-at-PR" below). The safe default is stop-at-PR; but once operators tire of hand-merging every obviously-green release, the loop can self-merge under a strict gate — that's usually what a mature loop ends up doing.
 
 ## Why a velocity gate instead of a fixed interval
 
@@ -34,12 +34,14 @@ Busy periods hit the commit threshold and release at ~4h. Quiet periods drift to
 
 This is the load-bearing design decision, and getting it wrong produces a loop that **can never release**.
 
-The obvious design is "run `/release`, promote `dev → main`." It doesn't work in an active repo:
+The obvious design is "promote `dev → main` directly" (rebase dev onto main, rebase-merge, resync dev). It doesn't work in an active repo:
 
-- `/release` **stops** when any PR targets the integration branch — correctly, because promoting typically **recreates or force-moves `dev`** (auto-delete-on-merge, force-push sync), which **retargets or orphans** every open PR against it.
+- Promotion-style releases **rewrite `dev`** (rebase + force-push sync), which **retargets or orphans** every open PR against it — so they must stop whenever any PR targets the integration branch.
 - In any repo with real throughput, `dev` is *never* free of open PRs. New ones arrive faster than they land.
 
 So the promotion can never run. Field data: three consecutive ticks released nothing while the backlog grew to 50 commits, and during a single tick the open-PR count went **up**, 4 → 5, with three PRs opened within ten minutes. A treadmill, not a queue.
+
+(As of 2026-07-24 `/release` itself uses this same frozen-ref cut — Form 1 below — and fast-forwards `main` to the cut SHA instead of rebase-merging, so it never rewrites `dev` and no longer stops on open dev PRs. The loop and `/release` now produce identical artifacts; the loop's remaining job is the cadence gate. **Merge the loop's release PRs with `/release` Step 5b's ff push, not `gh pr merge --rebase`** — a rebase-merge re-SHAs `main` and is exactly what forces Form 2 below.)
 
 Instead the loop cuts a release branch that does **not** move `dev`, and PRs *that* to `main`. Two forms, and which one you need depends on whether `dev` still descends from `main`:
 
@@ -93,6 +95,23 @@ An early version of this loop squash-merged green, reviewed dev PRs itself, on t
 
 Drop it. The loop cuts release branches; PR owners merge PRs. If you want a merge gate that refuses PRs with unresolved HIGH findings, that belongs in branch protection or a review bot — not in a cron job that only bites when it wins a race.
 
+## Auto-merge vs stop-at-PR
+
+Stop-at-PR (loop opens the release PR, a human merges) is the safe default, and the right starting point. But in a repo with real throughput it creates a new failure mode: **releases pile up waiting for a keystroke.** Observed: a green, mergeable release PR sat ~8 hours while the genuinely-new backlog behind it grew from 10 commits to 38 — the loop correctly refused to cut a second PR while one was pending, so nothing shipped until someone hand-merged. An obvious green release shouldn't need a human.
+
+So once the operator opts in, let the loop **self-merge its own release PR** under a strict gate — where "merge" means performing `/release` Step 5b's fast-forward push, not clicking a merge button. Fold it into the top of the tick: before cutting anything, if a release PR is already open, try to land it instead —
+
+- Land = **`/release` Step 5b's fast-forward push of the frozen cut SHA to production**: `git push origin "${CUT_SHA}:refs/heads/${PROD}"` (plain push, no force — a fast-forward by construction; GitHub then auto-marks the release PR `MERGED`). **Never `gh pr merge --rebase`** (and never any `gh pr merge` / UI merge): GitHub's rebase-merge mints new SHAs on `main`, which breaks the `main`-is-ancestor-of-`dev` invariant the ff-cut design depends on and drags you back into rewriting `dev` — the exact root cause `/release` was rebuilt to kill. Do the push **only if ALL hold**: `mergeable == MERGEABLE`, `mergeStateStatus == CLEAN`, every check `pass` (the release-lane `commit-lint` exemption showing `skipping` is fine), **zero unresolved review threads**, and no skip-ci token on the head commit — then re-check `git merge-base --is-ancestor origin/$PROD $CUT_SHA` immediately before the push (if `main` moved since the freeze, STOP and re-cut per Step 3; do not force). Then **run the fold (below)** and END the tick — the next tick cuts the next batch once `main` settles.
+- **Fold, every time you land.** The ff-push is only half of landing. semantic-release then writes `chore(release): X [skip ci]` (plus CHANGELOG, release notes, version bumps) onto production, and **nothing else ever moves it back** — the loop is the only actor, so a skipped fold is a permanent gap. Perform `/release` Step 6 before ending the tick: wait for the release workflow's back-commit to appear on `origin/$PROD`, then fold it into `$INT` per that step (ff-push when `$INT` is behind-only, rebase-forward in a private worktree when not). If the back-commit has not landed yet, do **not** silently skip — end the tick with an explicit `fold pending: <sha> on $PROD` note so the next tick picks it up before cutting anything.
+
+  This is the loop's single highest-consequence omission. An automated cut that never folds diverges production from integration by one commit per release, silently, forever: three unfolded `chore(release)` commits accumulated across a single day of autonomous cuts (a private data-platform repo, 2026-08-12) and were only caught by a human asking why the branches had drifted.
+- Still-pending CI → report "waiting on CI", END. Don't cut, don't merge.
+- Red / conflicting / unresolved findings / skip-ci token → do **not** merge; report the specific blocker and leave it for a human.
+
+**Why a review re-check on the release PR is *not* required:** a release PR is a cherry-pick (or snapshot) of commits **already reviewed and merged** into the integration branch. The upstream reviews are the gate; the release PR just promotes vetted content. So a review bot that *skips or rate-limits* the release PR itself does **not** block the merge (zero unresolved threads confirms nothing is outstanding). This is the one place a "review skipped" green check is safe to honor — precisely because the review already happened upstream. Do **not** generalize this to feature PRs, where the bot *is* the review.
+
+Scope the authority tightly: the loop auto-merges **only its own `release/<date> → main` PRs**. Never integration-branch PRs (their owners merge them), never `dev→main` promotions (those re-diverge dev). This keeps a runaway loop from ever touching work it didn't create.
+
 ## The tick
 
 Each firing runs four stages and stops at the first blocker:
@@ -111,7 +130,31 @@ If the gate fails, log `deferring — N commits, AGE_H h since last release` and
 
 **2. Skip if a release PR is already open** against production. Don't stack releases the operator hasn't merged yet — report the existing URL and end.
 
-**3. Pre-flight.** `git log --merges origin/main..origin/dev` must be empty if the repo enforces linear history. Expect production to carry a semantic-release back-commit (`chore(release): X [skip ci]` plus CHANGELOG/release notes) that the integration branch lacks — that divergence is **normal**, not a blocker; a rebase-merge replays over it cleanly. Don't mistake it for a broken branch.
+**3. Pre-flight.** `git log --merges origin/main..origin/dev` must be empty if the repo enforces linear history. Expect production to carry a semantic-release back-commit (`chore(release): X [skip ci]` plus CHANGELOG/release notes) that the integration branch lacks — a **single** such commit, from the cut you just landed, is **normal**, not a blocker; a rebase-merge replays over it cleanly. Don't mistake it for a broken branch.
+
+**But check the backlog — by content, not by counting.** An unfolded backlog on production is real: cutting on top of one is how a one-commit drift becomes an eight-commit one. The test that catches it must ask whether production carries *content* the integration branch lacks:
+
+Ask it **per file**, about `$PROD`'s net change since the merge base. That change is already on `$INT` when any of these hold — check them in this order, cheapest first:
+
+1. the file has identical content on both branches now
+2. `$PROD` never changed it since the merge base
+3. that exact blob appears somewhere in `$INT`'s history for the path (`$INT` had it, then moved on)
+4. `git apply --cached --reverse --check` of the patch succeeds against `$INT`'s tree
+5. every line the change introduces is already present in `$INT`'s copy of the file
+
+None of the introduced lines present ⇒ drift: block, and name the file. Some present ⇒ a rework: warn, do not block. A worked implementation with a mutation-proven test suite is `scripts/release_backlog_drift.sh` in a private data-platform repo.
+
+**Per file, not per commit.** Per-commit evaluation re-examines superseded states — two old release bumps flagged as drift purely because those version strings no longer appear anywhere on `$INT`, which had moved on to a later version. Only a file's *latest* state can be missing.
+
+**Undecidable warns; it does not block.** The costs are not symmetric. A false block stops every release cycle until a human intervenes; a false pass lets drift grow for one cycle, which the fold step catches. Print every warning and count every skipped path, so a quiet exclusion cannot read as full coverage.
+
+Three tempting tests are all wrong, each verified against live branches rather than reasoned about:
+
+- **Counting commits in `$INT..$PROD`** (defer on >1 back-commit or any non-`chore(release)` commit) counts SHAs, so **a hotfix merged straight to production deadlocks it permanently** — the same fix reaching `$INT` later carries a different SHA, so the range never empties, while a version-comparing fold detector reports "fold not needed". Seen in a private data-platform repo (bd-j23fp): 41 commits stranded, armed loop, passing gate.
+- **Whether `$PROD` merges cleanly into `$INT`** asks about a direction the cut never performs. Both-sides edits are the normal post-release state, and a tracker file like `.beads/issues.jsonl` diverges every release, so it reports "human must reconcile" on a cut that loses nothing. Same repo, bd-gdaza — the fix for the bug above, which reintroduced the stall one layer down.
+- **A per-file three-way merge** conflicts when the branches touched merely *adjacent* lines. A version bump beside a dependency bump is enough.
+
+Exclude tracker artifacts that both sides always edit, by explicit path list rather than pattern, and report what was skipped.
 
 **4. Cut + PR, then stop.** Ref-push the snapshot, open the PR, report the URL, **do not merge**.
 

@@ -47,6 +47,7 @@ Check for these drift patterns:
 | **Foundation gap** | Lots of feature beads but missing infrastructure/testing |
 | **Orphan work** | Closed beads that don't contribute to any user-visible outcome |
 | **Dependency deadlock** | Circular or stalled dependency chains blocking progress |
+| **Process porn** | Activity is receipts/certificates/gate-reports/meta-audits, not capability — hand off to `just-say-no-to-process-porn-and-ceremony` |
 
 ## Step 4: Report
 

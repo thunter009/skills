@@ -21,12 +21,14 @@ Run the agent-skills benchmark harness from the repo root.
 - No args: run paired mode (default — most useful)
 - `oracle`: oracle mode only (verify all solutions pass)
 - `paired`: paired mode (with vs without skills, compute delta)
-- `live`: live mode (invoke Claude + skill, score output, compare to oracle ceiling)
+- `live`: live mode (invoke Claude/Grok/Codex + skill, score vs oracle)
 - `live <skill-name>`: live mode with specific installed skill
 - `live --skill-path ./path/to/SKILL.md`: live mode with local SKILL.md
 - Task name(s): run specific task(s) only (e.g., `colgrep-find-auth-logic`)
-- `--model <model>`: model for live mode (default: haiku)
-- `--max-budget <usd>`: max USD per task in live mode (default: 0.50)
+- `--model <model>`: live model. `grok-*` infers `--cli grok`; `gpt-*`/`o3`/`o4`/`codex` infers `--cli codex`; else Claude. Default: haiku
+- `--cli claude|grok|codex`: force the live binary (overrides inference)
+- `--effort <level>`: Grok reasoning effort (default: medium)
+- `--max-budget <usd>`: max USD per task in Claude live mode (default: 0.50)
 
 ## Execution
 
@@ -60,7 +62,9 @@ If not found, tell user this must be run from within the agent-skills repo.
 ### 3. Run
 
 ```bash
-cd "$REPO_ROOT" && benchmark/.venv/bin/python -m benchmark.runner --mode <mode> [--tasks <task1> <task2> ...] [--skill <name>] [--skill-path <path>] [--model <model>] [--max-budget <usd>]
+cd "$REPO_ROOT" && benchmark/.venv/bin/python -m benchmark.runner --mode <mode> \
+  [--tasks <task1> <task2> ...] [--skill <name>] [--skill-path <path>] \
+  [--cli claude|grok|codex] [--model <model>] [--effort medium] [--max-budget <usd>]
 ```
 
 ### 4. Show results

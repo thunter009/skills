@@ -72,9 +72,20 @@ references.
   Fill it and press Enter to jump/select. **Name Box navigation can fail
   silently**: the box shows the typed reference but Enter doesn't commit,
   and the selection stays where it was. Always verify the active cell
-  after navigating (active-cell border position on a screenshot, or read
-  the Name Box back) **before** pasting or typing — a paste after a
+  after navigating **before** pasting or typing — a paste after a
   silently-failed jump lands on the wrong cells with no error.
+- **ANTI-PATTERN — reading the Name Box back is NOT verification.** The
+  Name Box reports the reference you *typed*, whether or not the selection
+  actually moved. It returns the expected value in exactly the failure case
+  you are testing for, so it cannot detect a silently-failed jump. It is a
+  false positive generator, not a check. **Verify the active cell from a
+  screenshot** (active-cell border position) — that is the only cheap check
+  that reads real selection state. This bit hard on 2026-08-01: the Name Box
+  read `M155` before every one of 5 pastes, the selection had never moved,
+  and all 5 writes concatenated into one cell of a live household budget —
+  the five intended values (`2600`, `1300`, `1175`, `200`, `150`, `26000`)
+  run together as a single 23-digit number in what should have been a $0.00
+  cell.
 - **Clipboard is NOT available to CDP-synthesized keystrokes in
   embedded/webview browser panes** (no transient user activation):
   Cmd+C/Cmd+V across documents silently no-op. The workaround that works:
@@ -104,6 +115,30 @@ references.
   into the target. Sheets' web clipboard survives navigation between
   documents in the same browser pane, so copy-in-source /
   navigate-to-destination / paste-values-in-destination works.
+- **Verifying a write: use an INDEPENDENT read path.** Never verify a write
+  through the editor DOM of the pane that performed it — that pane's state is
+  the thing under test. **Required check after any write**: re-read the target
+  range through a *separate* htmlview pane or a fresh page load, and compare
+  against what you intended. Two editor-DOM reads that look authoritative and
+  are not:
+  - **The formula bar is not a reliable cell-value read.**
+    `#t-formula-bar-input-container` `.innerText` also picks up Sheets'
+    autocomplete dropdown. A cell genuinely containing `0` read back as
+    `"0\n2600"`, and later as `"2600\n1300\n1175\n200\n150\n26000"` —
+    that is the suggestion list, not the value. It is most misleading exactly
+    when you are verifying a write.
+  - **`browser type` does not commit to the grid, but is not inert either.**
+    It inserts into the cell editor without committing, so the formula bar
+    still shows the old value and the call looks like a no-op. A later
+    navigation then commits the uncommitted text. On 2026-08-01 a `type` that
+    appeared to do nothing silently committed `02600` several steps later.
+    After any `type`, commit deliberately (Enter) and confirm via the
+    independent read path.
+- **Few cells in a live financial sheet? Hand the list to the user.** For a
+  handful of cells, write out the cell references and values and let the human
+  paste them. Five cells is a two-minute manual edit; the automation carried
+  strictly worse cost and risk in the 2026-08-01 incident. Reserve browser
+  automation for volumes a human genuinely cannot do by hand.
 - **Cell notes for provenance**: select the cell, press Shift+F2, type the
   note text, press Escape. Useful for leaving a breadcrumb on cells you
   hand-ported, e.g. "static values as of 2026-06-01; formula pattern was

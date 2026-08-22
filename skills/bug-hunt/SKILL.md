@@ -193,7 +193,7 @@ For codex/gemini engines, call `hunt.sh` with stdout/stderr redirected to a
 per-iteration log file (NOT piped to `tail`):
 ```bash
 LOGFILE=".bug-hunt/phase${P}-iter${ITER}.log"
-bash "$SKILL_DIR/scripts/hunt.sh" \
+bash ~/.claude/skills/bug-hunt/scripts/hunt.sh \
   --phase <P> \
   --engine <ENGINE> \
   --model <M> \
@@ -353,7 +353,7 @@ accumulates ghost entries pointing at deleted directories.
 
 ### 6. Run hunt.sh for individual iterations
 
-The bash script `$SKILL_DIR/scripts/hunt.sh` handles a **single iteration**
+The bash script `~/.claude/skills/bug-hunt/scripts/hunt.sh` handles a **single iteration**
 of engine execution. Claude Code calls it repeatedly, injecting journal context
 between calls.
 
@@ -362,7 +362,7 @@ between calls.
 # log file under .bug-hunt/, then tail the file. NEVER pipe hunt.sh stdout into tail
 # (see §4b for why).
 LOGFILE=".bug-hunt/phase${P}-iter${ITER}.log"
-bash "$SKILL_DIR/scripts/hunt.sh" \
+bash ~/.claude/skills/bug-hunt/scripts/hunt.sh \
   --phase <P> \
   --engine <ENGINE> \
   --model <M> \

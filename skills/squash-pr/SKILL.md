@@ -60,7 +60,7 @@ condition is skipped — and every skip must state its blocking reason. Never si
    fetches `labels`; actually read them:
 
    ```bash
-   HOLD_LABELS="${HOLD_LABELS:-hold,do-not-merge,agent-hold,ci-hold}"
+   HOLD_LABELS="${HOLD_LABELS:-hold,do-not-merge,agent-hold,operator-hold,ci-hold}"
    # NB: pipe to real jq — `gh --jq` takes the filter only and rejects `--arg`
    # ("accepts at most 1 arg(s), received 4").
    gh pr view <N> --json labels | jq -r --arg h "$HOLD_LABELS" \
@@ -72,13 +72,19 @@ condition is skipped — and every skip must state its blocking reason. Never si
    A hold label is a deliberate machine-or-human decision to keep a PR out of the queue.
    Labels differ only in **who may remove them** — that is never the merging loop's business
    either way. Common vocabulary: `hold` / `do-not-merge` are the human's; `agent-hold` belongs
-   to a review sweep (unfixed HIGH finding); `ci-hold` belongs to a CI green-up loop. **Never
-   write or remove any of them** — only refuse to merge past them.
+   to a review sweep (agent-fixable HIGH finding); `operator-hold` belongs to that sweep when a
+   HIGH needs a human decision; `ci-hold` belongs to a CI green-up loop. **Never write or remove
+   any of them** — only refuse to merge past them.
 
-   Do NOT gate on *positive* labels such as `ready-to-merge` / `needs-review` if the repo has
-   them. Those are view-only triage labels, and they are a claim about the head SHA they were
-   earned at, so they can be stale. This gate's own mechanical checks (below) are evaluated
-   fresh every tick and are what make the merge safe.
+   **Readiness labels, when the repo uses them.** If `gh label list` shows `ready-to-merge`
+   as a repo label, they GATE this merge: skip unless the PR wears `ready-to-merge`; skip if
+   it wears `needs-review`; skip if it wears neither. Never write or remove them. Mechanical
+   checks below still run, so a stale `ready-to-merge` whose head has moved still fails the
+   review-SHA check. If the repo does not have those labels, this clause is a no-op.
+
+   Why (private managed repo, 2026-08-23): treating them as view-only let the drain merge PRs still
+   labelled `needs-review` (#2147, #2149, #2153) the moment CI went green, before the review
+   sweep could promote the label.
 
    **b. No hold PROSE, and not structurally ineligible.** Skip drafts; skip cross-repository
    fork PRs; skip release PRs (title `Release:`/`release:` or head `release/*`); skip any PR

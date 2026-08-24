@@ -284,12 +284,23 @@ note is worse than none.
 In `--dry-run`, print the `MERGE_BODY` you would use (or "none — internal") in
 the verdict table rather than merging.
 
-### 3b: Squash-merge through GitHub
+### 3b: Re-check the exact head, then squash-merge through GitHub
+
+Capture the head immediately before the final gate and merge. In `--auto` mode, re-run every
+Autonomous merge-gate leg against this snapshot; if the head differs from the head evaluated in
+Step 1/2, start the gate over on the new head. Where readiness labels exist, require the final label
+set to contain `ready-to-merge`, omit `needs-review`, and omit every hold label. Leave
+`ready-to-merge` on the merged PR as an audit trail.
+
+```bash
+FINAL_HEAD="$(gh pr view "$PR" --json headRefOid --jq '.headRefOid')"
+```
 
 Use GitHub's PR merge operation:
 
 ```bash
-gh pr merge "$PR" --squash --delete-branch --subject "<PR title> (#<PR number>)" --body "$MERGE_BODY"
+gh pr merge "$PR" --squash --delete-branch --match-head-commit "$FINAL_HEAD" \
+  --subject "<PR title> (#<PR number>)" --body "$MERGE_BODY"
 ```
 
 `$MERGE_BODY` is empty for internal-only PRs, which reproduces the previous

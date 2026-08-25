@@ -69,15 +69,16 @@ Unless `--no-mail` is set:
 3. Check inbox. Acknowledge pending messages. Note active agents and their
    file reservations.
 
-4. **Check for prior hunt history**: Call `fetch_topic` with topic `bug-hunt`
-   to see if past hunts found recurring patterns or known-fragile areas.
-   Include a 1-line summary of prior findings in the first engine prompt.
+4. **Check for prior hunt history**: Call `search_messages` with
+   `query="bug AND hunt"`, `ranking="recency"`, and `limit=20` to find past
+   hunt threads. Include a 1-line summary of prior findings in the first engine
+   prompt.
 
 5. Create a hunt thread ID: `bug-hunt-YYYY-MM-DD-HHMM`
 
 6. Announce the hunt via `send_message`:
    - thread_id: the hunt thread ID
-   - topic: `bug-hunt`
+   - subject: prefix with `[bug-hunt]`
    - body: phases, iteration count, target directory, any prior-hunt context
 
 **Agent Mail isolation**: Only this Claude Code session registers with Agent
@@ -305,8 +306,7 @@ summary, so summaries don't balloon.
 If Agent Mail is active:
 - Call `send_message` with:
   - thread_id: the hunt thread ID
-  - topic: `bug-hunt`
-  - subject: `"P<phase>I<iter>: <brief summary>"`
+  - subject: `"[bug-hunt] P<phase>I<iter>: <brief summary>"`
   - body: the iteration report from 4c
 
 If `--no-mail`:
@@ -330,7 +330,7 @@ After all phases complete:
 - Suggest running quality gates: `ubs $(git diff --name-only)`
 
 If Agent Mail is active:
-- Post final summary to hunt thread (topic: `bug-hunt`)
+- Post final summary to hunt thread with subject prefix `[bug-hunt]`
 - Call `summarize_thread` on the hunt thread to produce a final digest
 - Present the digest to the user
 - Check inbox one final time and respond to anything pending
@@ -388,7 +388,7 @@ The script reads `--journal-file` and prepends its contents to the engine prompt
 11. **Respect file reservations** — if another agent has reserved files, tell the engine to skip them
 12. **Announce, don't ask** — send "I'm starting phase N" messages, don't wait for replies
 13. **Journal is the memory** — every iteration must post findings to the hunt thread. Skipping this breaks the accumulation loop.
-14. **Prior hunts inform current hunts** — always check `fetch_topic("bug-hunt")` at startup for recurring patterns
+14. **Prior hunts inform current hunts** — always search with `query="bug AND hunt"` at startup for recurring patterns
 15. **No parallel sessions on same repo** — running multiple bug-hunt sessions on the same checkout causes OOM kills and journal pollution. Use separate worktrees or run sequentially. `hunt.sh` now hard-refuses dispatch at the shared concurrency cap instead of only warning.
 16. **Journal hard cap is 2KB** — both the `--no-mail` journal file and `summarize_thread` output must be trimmed to 2KB before passing to the engine. Priority: unexplored areas > patterns > recent results.
 17. **Feature creep = revert** — engines sometimes add features (new deps, CI workflows, config files) instead of fixing bugs. `hunt.sh` flags new non-test files after each iteration. Review these and `git revert` any feature-creep commits immediately.

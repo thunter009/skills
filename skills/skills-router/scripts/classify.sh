@@ -122,6 +122,10 @@ grocer
 (^|[^a-z])cook(ing|book)?([^a-z]|$)
 ingredient'
 
+# UI / visual-design signal. Alias-only (no category keyword list): fires
+# ui-polish + refactoring-ui. Kept narrow — the hook runs on every prompt.
+re_ui='looks? (off|amateur|cheap|unfinished|cluttered)|make (this|it) look (better|nicer)|polish (the |this |my )?(ui|ux|frontend|front-end|screen|page|dashboard)|(^|[^a-z])(css|tailwind|stylesheet)([^a-z]|$)|(color|colour) (palette|scale|ramp)|design tokens?|(font|type) (size|scale)|(box|drop)[- ]shadows?|border[- ]radius|dark mode'
+
 add_alias() { # $1 skill, $2 category
   case " $alias_skills " in *" $1 "*) return 0 ;; esac
   alias_skills="${alias_skills:+$alias_skills }$1"
@@ -181,6 +185,7 @@ classify_one() {
   [[ $prompt =~ (^|[^a-z])de-?slop ]]             && add_alias de-slopify docs
   [[ $prompt =~ (^|[^a-z])mealie([^a-z]|$) ]]     && add_alias mealie home
   [[ $prompt =~ process\ porn|reward\ hack|(^|[^a-z])ceremony([^a-z]|$) ]] && add_alias just-say-no-to-process-porn-and-ceremony meta
+  [[ $prompt =~ $re_ui ]] && { add_alias ui-polish code; add_alias refactoring-ui code; }
 
   local best_cat="" best_n=0 second_n=0 total_hits=0 cat n
   for cat in $CATEGORIES; do

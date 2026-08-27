@@ -31,3 +31,5 @@
 {"prompt": "import this recipe into mealie", "category": "home"}
 {"prompt": "add a recipe for chicken curry to the recipe manager", "category": "home"}
 {"prompt": "stop the process porn ceremony and get back to real shipping work", "category": "meta"}
+{"prompt": "the settings page looks off, make it look better", "category": "code"}
+{"prompt": "build a color palette and design tokens for the dashboard", "category": "code"}

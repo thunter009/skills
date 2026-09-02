@@ -16,6 +16,14 @@
 # the code being merged. Reviews carry `commit_id`; anything that does not match headRefOid
 # is reported as stale and does not count.
 #
+# AND CARRYING EVIDENCE, not merely length. A body-length floor is a proxy, and a template
+# defeats a proxy. On 2026-09-01 a review loop posted the same 126-character body on four PRs
+# inside three seconds -- `Verdict: APPROVE`, every section reading `None`, no file named, no
+# line cited -- and this guard passed all four, because 126 > 40. The floor is now 200 chars,
+# and a body that is nothing but section labels reading `None`/`none` is rejected by shape
+# regardless of its length: `UNREVIEWED: template-only review body`. A review that names no
+# file and cites no line is the shape of a review, not a review.
+#
 # EXIT CODES — 3 is not a pass:
 #   0  REVIEWED      at least one substantive review body at the current head SHA
 #   1  UNREVIEWED    no such body (this is a definite answer: refuse the merge)
@@ -35,7 +43,7 @@
 #   head.txt              the PR's headRefOid
 set -uo pipefail
 
-MIN_BODY=40          # chars; shorter than this is "lgtm", not a review
+MIN_BODY=200         # chars; shorter than this is "lgtm", not a review
 PR=""; REPO=""; JSON=0
 
 while [ $# -gt 0 ]; do
@@ -43,7 +51,7 @@ while [ $# -gt 0 ]; do
     --repo)     REPO="${2:-}"; shift 2 ;;
     --min-body) MIN_BODY="${2:-}"; shift 2 ;;
     --json)     JSON=1; shift ;;
-    -h|--help)  sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,43p' "$0"; exit 0 ;;
     -*)         echo "unknown flag: $1" >&2; exit 2 ;;
     *)          PR="$1"; shift ;;
   esac
@@ -90,16 +98,56 @@ echo "$REVIEWS"  | jq -e 'type=="array"' >/dev/null 2>&1 || { emit INDETERMINATE
 echo "$COMMENTS" | jq -e 'type=="array"' >/dev/null 2>&1 || COMMENTS='[]'
 [ -n "$HEAD" ] || { emit INDETERMINATE "no head SHA available"; exit 3; }
 
-# Substantive review bodies at the current head. CHANGES_REQUESTED counts as evidence a
-# review happened — it blocks the merge elsewhere in the gate, not here.
-AT_HEAD="$(echo "$REVIEWS" | jq --arg h "$HEAD" --argjson n "$MIN_BODY" '
-  [ .[] | select((.body // "" | length) >= $n)
-        | select(.state != "PENDING")
-        | select((.commit_id // "") == $h) ] | length')"
+# --- template detection -------------------------------------------------------------------
+# A review body earns credit by naming something. `has_hard_evidence` is that test: a `### Files`
+# section, a `path:line` citation, or the explicit "No findings after checking:" line the review
+# loop emits when a clean PR really was read.
+#
+# `is_template_only` is the complement, and it is deliberately shape-based rather than a
+# blocklist of known bodies. Drop the `## Review` heading, drop the `Verdict:` line, drop every
+# section label whose value is empty or `None`. If nothing is left, the body said nothing. That
+# catches a padded template as readily as the 126-char original, and it cannot be defeated by
+# adding words to the heading.
+# shellcheck disable=SC2016  # jq program text; $h and $n are jq params, not shell vars
+JQ_DEFS='
+def has_hard_evidence:
+  test("(^|\n)[ \t]*#{2,6}[ \t]+Files\\b"; "i")
+  or test("[A-Za-z0-9_][A-Za-z0-9_./-]*[./][A-Za-z0-9_-]+:[0-9]+")
+  or test("No findings after checking"; "i");
 
-STALE="$(echo "$REVIEWS" | jq --arg h "$HEAD" --argjson n "$MIN_BODY" '
+def is_template_only:
+  (has_hard_evidence | not)
+  and test("Verdict[ \t]*:?[ \t]*\\**[ \t]*APPROVE"; "i")
+  and ([ split("\n")[]
+         | sub("^[ \t]+"; "") | sub("[ \t]+$"; "")
+         | select(length > 0)
+         | select(test("^([*_> \t]*#{1,6}[ \t]*Review\\b|\\*\\*Review\\b)"; "i") | not)
+         | select(test("^[*_> \t]*Verdict[ \t]*:"; "i") | not)
+         | select(test("^[*_`> \t-]*(HIGH|MEDIUM[ \t]*/?[ \t]*NIT|MEDIUM|NIT|LOW|CRITICAL|Not[ \t]+reviewed)[*_`]*[ \t]*[:—-]?[ \t]*\\**[ \t]*(none[.]?)?\\**[ \t]*$"; "i") | not)
+         | select(test("^[*_`> \t-]*(none|n/a)[.]?[*_`]*$"; "i") | not)
+       ] | length) == 0;
+
+def submitted($h): select(.state != "PENDING") | select((.commit_id // "") == $h);
+'
+
+# Substantive review bodies at the current head: long enough AND not a bare template.
+# CHANGES_REQUESTED counts as evidence a review happened — it blocks the merge elsewhere in
+# the gate, not here.
+AT_HEAD="$(echo "$REVIEWS" | jq --arg h "$HEAD" --argjson n "$MIN_BODY" "$JQ_DEFS"'
+  [ .[] | submitted($h)
+        | select((.body // "" | length) >= $n)
+        | select((.body // "") | is_template_only | not) ] | length')"
+
+# Bodies at head that were rejected only because they are templates. Reported as its own
+# reason so the hook message names the cause instead of "no substantive review body".
+TEMPLATE_AT_HEAD="$(echo "$REVIEWS" | jq --arg h "$HEAD" "$JQ_DEFS"'
+  [ .[] | submitted($h)
+        | select((.body // "") | is_template_only) ] | length')"
+
+STALE="$(echo "$REVIEWS" | jq --arg h "$HEAD" --argjson n "$MIN_BODY" "$JQ_DEFS"'
   [ .[] | select((.body // "" | length) >= $n)
         | select(.state != "PENDING")
+        | select((.body // "") | is_template_only | not)
         | select((.commit_id // "") != $h) ] | length')"
 
 # Why CodeRabbit contributed nothing — reported, never decisive.
@@ -116,10 +164,15 @@ if [ "$AT_HEAD" -gt 0 ] 2>/dev/null; then
   exit 0
 fi
 
+if [ "$TEMPLATE_AT_HEAD" -gt 0 ] 2>/dev/null; then
+  emit UNREVIEWED "template-only review body — $TEMPLATE_AT_HEAD review(s) at head ${HEAD:0:8} name no file, cite no line, and read None/none throughout$CR_NOTE"
+  exit 1
+fi
+
 if [ "$STALE" -gt 0 ] 2>/dev/null; then
   emit UNREVIEWED "$STALE review(s) exist but none at head ${HEAD:0:8} — code changed since$CR_NOTE"
   exit 1
 fi
 
-emit UNREVIEWED "no substantive review body (min ${MIN_BODY} chars) on #$PR$CR_NOTE"
+emit UNREVIEWED "no substantive review body (min ${MIN_BODY} chars, with a named file or cited line) on #$PR$CR_NOTE"
 exit 1

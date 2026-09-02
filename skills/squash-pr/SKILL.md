@@ -150,7 +150,15 @@ condition is skipped — and every skip must state its blocking reason. Never si
    leave a review body, so the check needs no signature list to reject them; it looks for
    positive evidence and finds none. It additionally rejects a substantive review left at an
    **older commit** — a review of code that is no longer the code being merged — plus PENDING
-   (unsubmitted) reviews and sub-40-char rubber stamps.
+   (unsubmitted) reviews and sub-200-char rubber stamps.
+
+   It also rejects **template-only bodies**, reported as `UNREVIEWED: template-only review
+   body`. A body whose sections all read `None`/`none`, naming no file and citing no line, is
+   the shape of a review rather than a review. On 2026-09-01 a review loop posted one
+   126-character body of exactly that shape on four PRs inside three seconds, and the old
+   40-character floor passed every one. Length is a proxy; a template defeats a proxy. The
+   check now looks for a `### Files` section, a `path:line` citation, or an explicit
+   `No findings after checking:` line before it credits a body.
 
    Review present but with HIGH-severity findings not visibly resolved/answered ⇒ skip
    ("unresolved HIGH finding"). That judgment stays human/agent-side; the script answers

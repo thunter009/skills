@@ -195,6 +195,31 @@ The helper:
 - prints `autoreview clean: no accepted/actionable findings reported` when the selected review command exits 0
 - exits nonzero when accepted/actionable findings are present
 
+## Before self-merging: post the verdict to the PR
+
+A local review is invisible to everyone but you. The squash drain's gate
+(`squash-pr/scripts/review-evidence.sh`) and any later audit read a PR with no review body at
+its head as **UNREVIEWED** — agent-skills #414 (2026-09-17) was codex-reviewed here, three
+findings fixed, self-merged, and left zero review artifacts on GitHub. So when the PR you are
+about to merge yourself was reviewed only by this skill, post the final run as a COMMENT review
+first:
+
+```bash
+~/.claude/skills/autoreview/scripts/autoreview --mode branch --base origin/dev --json-output /tmp/review.json
+~/.claude/skills/autoreview/scripts/post-review-evidence.sh <pr> --from /tmp/review.json --rounds <N>
+gh pr merge <pr> --squash --delete-branch --match-head-commit "$(gh pr view <pr> --json headRefOid -q .headRefOid)"
+```
+
+- Use the **final** helper run's JSON (the clean one, or the one whose remaining findings you
+  consciously rejected). `--rounds` is how many review/fix passes it took; it goes in the body.
+- The script pins the review to the head SHA it was given and refuses if the head moved — a
+  review of older code is not evidence about the code being merged. Re-run the helper, then post.
+- Event is always **COMMENT**. It never approves, never requests changes, never merges. The
+  merge-authority rule (CI green + review clean, no unresolved HIGH) is unchanged; this only
+  makes the review *visible* where the gate looks.
+- Skip it when the PR already carries a substantive review at head from the PR review sweep or
+  a human — check with `squash-pr/scripts/review-evidence.sh <pr>` (exit 0 = already covered).
+
 ## Final Report
 
 Include:

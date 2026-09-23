@@ -60,7 +60,7 @@ condition is skipped — and every skip must state its blocking reason. Never si
    fetches `labels`; actually read them:
 
    ```bash
-   HOLD_LABELS="${HOLD_LABELS:-hold,do-not-merge,agent-hold,operator-hold,ci-hold}"
+   HOLD_LABELS="${HOLD_LABELS:-hold,do-not-merge,needs-copy-approval,agent-hold,operator-hold,ci-hold}"
    # NB: pipe to real jq — `gh --jq` takes the filter only and rejects `--arg`
    # ("accepts at most 1 arg(s), received 4").
    gh pr view <N> --json labels | jq -r --arg h "$HOLD_LABELS" \

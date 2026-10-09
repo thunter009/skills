@@ -18,6 +18,7 @@ Install with [skills](https://github.com/vercel-labs/skills): `npx skills add th
 | [`codex`](skills/codex/SKILL.md) | Run Codex CLI for parallel implementation, review, or second opinions. |
 | [`colgrep`](skills/colgrep/SKILL.md) | Search code by meaning with colgrep instead of literal grep. |
 | [`create-pull-request`](skills/create-pull-request/SKILL.md) | Open a GitHub pull request with repo-specific PR conventions. |
+| [`decision-canvas`](skills/decision-canvas/SKILL.md) | | |
 | [`deep-review`](skills/deep-review/SKILL.md) | Run adversarial, flow-tracing code review and fix real issues. |
 | [`demo-video-finder`](skills/demo-video-finder/SKILL.md) | Find short, single-topic, reputable how-to and demo videos for a list of items (exercises, techniques, steps, moves), with jump-to timestamps for long ones. Ret |
 | [`design`](skills/design/SKILL.md) | Take a feature idea from fuzzy to build-ready — grill, prototype, then plan. |

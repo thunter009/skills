@@ -93,14 +93,28 @@ condition is skipped — and every skip must state its blocking reason. Never si
 
    Prose alone is not sufficient where labels exist: a repo can label a PR `hold` without ever
    editing its title, and a gate that reads only the title merges straight past it.
-3. **Mergeable and green**: `mergeable == "MERGEABLE"` and every required check in
-   `statusCheckRollup` has concluded SUCCESS. A PENDING/QUEUED check ⇒ skip this tick —
-   never wait-and-merge. A FAILURE/ERROR check ⇒ skip. Read
-   `gh pr view N --json mergeable,mergeStateStatus,statusCheckRollup`; do not trust
-   `gh pr checks` alone (known to report phantom states after pushes).
-4. **CI actually ran.** Leg 3 asks whether anything failed, which is the wrong question when
-   the answer is "nothing ran" — a PR with zero workflow runs has no failing checks and reads
-   as green. Run the check — do not infer it from the rollup:
+3. **Mergeable and green**: `mergeable == "MERGEABLE"` (read
+   `gh pr view N --json mergeable`) and every REQUIRED context green at the exact head. Run
+   the check — do not derive it from `gh pr checks` or the rollup:
+
+   ```bash
+   ~/.claude/skills/squash-pr/scripts/ci-verdict.sh <N> --repo <owner/name>
+   #  exit 0 GREEN · 1 FAILED/PENDING/UNTRIGGERED · 3 INDETERMINATE
+   ```
+
+   **Merge only on exit 0.** `PENDING` ⇒ skip this tick, never wait-and-merge. `FAILED` ⇒
+   skip. `UNTRIGGERED` ⇒ skip and report the cause: stale branch → rebase onto the base;
+   Actions outage → wait; never `--admin`. Treat 3 like 1. Exit 3 also covers a base with no
+   ruleset-required contexts; legs 3 and 4 then rest on `ci-evidence.sh` alone.
+
+   Why not "nothing pending": when GitHub creates zero runs, `gh pr checks` lists only app
+   rows (a rate-limited CodeRabbit line), nothing is pending, and the PR reads green. The
+   script takes the expected set from the base branch's ruleset, a second source the polled
+   response cannot silently shrink.
+4. **CI actually ran.** Leg 3 covers only what the ruleset requires. A base whose ruleset
+   requires nothing gives leg 3 no expected set (exit 3), and a narrow required set can pass
+   while every other workflow never ran. This leg asks the breadth question directly. Run the
+   check — do not infer it from the rollup:
 
    ```bash
    ~/.claude/skills/squash-pr/scripts/ci-evidence.sh <N> --repo <owner/name> [--min N]
@@ -109,14 +123,16 @@ condition is skipped — and every skip must state its blocking reason. Never si
 
    **Merge only on exit 0. Treat 3 exactly like 1**, for the same reason as leg 5.
 
-   It reads the SAME `statusCheckRollup` snapshot leg 3 reads, and counts **distinct
+   It reads `statusCheckRollup` in one snapshot, and counts **distinct
    completed GitHub Actions workflow runs** (identified by an `/actions/runs/<id>/` details
    URL), ignoring `SKIPPED`/`CANCELLED`. Each choice is load-bearing:
 
-   - **One snapshot, not two.** An earlier draft read the `actions/runs` API instead. Two
+   - **One snapshot, not two.** An earlier draft read the `actions/runs` API as well. Two
      sources meant two moments: a run could be queued and visible to `actions/runs` while
-     still absent from the rollup, so leg 3 saw nothing pending, this leg saw a queued run,
-     and both passed on a PR nothing had validated. One snapshot cannot disagree with itself.
+     still absent from the rollup, so a "nothing pending" leg 3 passed while this leg counted a
+     queued run, and the PR merged with nothing validated. One snapshot cannot disagree with
+     itself. Leg 3 now requires every required context *completed*, which closes the same race
+     from its side.
    - **Completed only.** An in-flight run is evidence CI *is running*, not that it *ran*.
      Refusing costs one tick — the loop re-evaluates next cycle — and closes the race above.
    - **Distinct runs.** Three re-runs of one workflow are one workflow's worth of evidence;

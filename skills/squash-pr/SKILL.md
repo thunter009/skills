@@ -123,16 +123,17 @@ condition is skipped — and every skip must state its blocking reason. Never si
 
    **Merge only on exit 0. Treat 3 exactly like 1**, for the same reason as leg 5.
 
-   It reads `statusCheckRollup` in one snapshot, and counts **distinct
-   completed GitHub Actions workflow runs** (identified by an `/actions/runs/<id>/` details
-   URL), ignoring `SKIPPED`/`CANCELLED`. Each choice is load-bearing:
+   It reads the workflow runs at the exact head (`actions/runs?head_sha=`), the API leg 3
+   reads its jobs from, and counts **distinct completed GitHub Actions workflow runs**,
+   ignoring `SKIPPED`/`CANCELLED`. It never reads `statusCheckRollup` or check-runs: a
+   fine-grained token cannot hold the Checks permission they need. Each choice is load-bearing:
 
-   - **One snapshot, not two.** An earlier draft read the `actions/runs` API as well. Two
+   - **One source, not two.** An earlier draft read the rollup and `actions/runs`. Two
      sources meant two moments: a run could be queued and visible to `actions/runs` while
      still absent from the rollup, so a "nothing pending" leg 3 passed while this leg counted a
-     queued run, and the PR merged with nothing validated. One snapshot cannot disagree with
-     itself. Leg 3 now requires every required context *completed*, which closes the same race
-     from its side.
+     queued run, and the PR merged with nothing validated. One API at one head cannot disagree
+     with itself. Leg 3 also requires every required context *completed*, which closes the same
+     race from its side.
    - **Completed only.** An in-flight run is evidence CI *is running*, not that it *ran*.
      Refusing costs one tick — the loop re-evaluates next cycle — and closes the race above.
    - **Distinct runs.** Three re-runs of one workflow are one workflow's worth of evidence;
@@ -191,6 +192,39 @@ reason, and move on (no interactive skip/retry/abort prompt).
 
 In `--dry-run`, stop after gate evaluation: print the verdict table
 (| # | Title | Verdict | Reason |) and exit without merging.
+
+### Reruns race the checks API
+
+`gh run rerun` returns before GitHub lists the new attempt. For a second or two, every check row from the rerun is absent from `gh pr checks`, `statusCheckRollup`, the REST check-runs and the run's jobs: the old attempt is hidden and the new one does not exist yet. A read in that window sees only the other, already-terminal rows, so "nothing pending, nothing failed" reads green.
+
+Measured on merged PR #602 (2026-10-28): before `gh run rerun --failed` the board read `fail=1`. The first read after the command returned read `rows=2 pending=0 fail=0`, and 0.8 s later the board read `pending=1`. `gh pr checks 602 --watch`, started right after the rerun, exited 0 in 3 of 3 tries with the rerun's row missing. A private repo's PR #2462 nearly merged on the same read (2026-09-01).
+
+Leg 3 does not have this hole: `ci-verdict.sh` never reports GREEN for a required context with no row (`tests/test_ci_verdict.sh` case 2). A hand-rolled monitor, `gh pr checks --watch` and a non-required check (often a deploy preview) have no such floor. After a rerun, wait until the board lists a job ID that the pre-rerun snapshot lacks. The board is `actions-checks.py`, which reads a head with a failed run live, never from its cache:
+
+```bash
+run_jobs() {  # job IDs of run $RUN on PR $PR in $REPO (owner/name); status 3 if the read failed
+  local board
+  board=$(~/.claude/skills/atrium-loops/scripts/actions-checks.py checks \
+    --repo "$REPO" --pr "$PR" --json 2>/dev/null)  # exits 1/8 on fail/pending: test the JSON
+  jq -e 'type == "array"' <<<"$board" >/dev/null 2>&1 || return 3
+  jq -r --arg r "/runs/$RUN/" '.[].link | select(contains($r)) | split("/") | last' \
+    <<<"$board" | sort
+}
+NEW=""
+if BEFORE=$(run_jobs) && gh run rerun "$RUN" --failed; then
+  for _ in $(seq 1 10); do
+    NEW=$(comm -13 <(printf '%s\n' "$BEFORE") <(run_jobs))
+    [ -n "$NEW" ] && break
+    sleep 3
+  done
+fi
+[ -n "$NEW" ] || echo "INDETERMINATE: rerun of $RUN not seen on the board"
+```
+
+- Wait for a new job ID, not for `pending`. A job that finishes between two reads never shows `pending`.
+- A wait that times out is INDETERMINATE, never green.
+- In a loop, end the cycle after a rerun and judge the PR next cycle. That needs no wait.
+- A deploy or preview check reports the job, not the deployment. Before you count one green after a rerun, probe the artifact: `curl -sS -o /dev/null -w '%{http_code}' "$PREVIEW_URL"` must print `200`.
 
 ## Step 2: Pre-flight
 

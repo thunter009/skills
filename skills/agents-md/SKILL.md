@@ -1,9 +1,13 @@
 ---
 name: agents-md
-description: Create repo-specific AGENTS.md guardrails from the codebase.
+description: Create repo-specific AGENTS.md guardrails from the codebase; audit an existing AGENTS.md or CLAUDE.md for stale paths, dead commands, and line-budget overruns.
 when-to-use:
 - create AGENTS.md, bootstrap agent instructions
 - When a repo needs AI agent guidance
+- audit AGENTS.md or CLAUDE.md, check if my CLAUDE.md is up to date, is this instruction file stale
+related-skills:
+- daily-distill
+- field-guide
 allowed-tools:
 - Bash
 - Read
@@ -285,6 +289,15 @@ Keep it declarative — one fact per line — so any skill can parse it instead 
 AGENTS.md accretes: agents append dated session lessons, tool-injected boilerplate grows, and facts rot as the repo moves (field-tested: one repo hit 235 lines — 40 of dated lesson dumps, 100 of tool boilerplate, plus two factually stale sections — before a condense pass). When bootstrapping OR revising an AGENTS.md, install these guards:
 
 1. **Contract header** (2 lines, right under the intro): state a line budget, "durable rules only", and where non-durable content routes — dated lessons/surprises to a FIELD-GUIDE.md or equivalent, session learnings to a journal, task specifics to the issue tracker. End with "adding when full means deleting something weaker." The header travels with the file, so every agent (Claude, Codex, Gemini, Cursor) sees it at edit time.
-2. **Mechanical size guard** where the repo has pre-commit or CI: a script failing the commit when AGENTS.md exceeds the budget, with the routing guidance in the failure message. Set the budget ~1.5x current size. Prose rules only reach agents that read them; hooks reach all of them.
+2. **Mechanical size guard.** `scripts/audit-instructions.sh` (invoke from other repos as `~/.claude/skills/agents-md/scripts/audit-instructions.sh`) reads the budget from the contract header and exits 1 with the routing guidance when the file is over it. Wire it into pre-commit or CI where the repo has one. Set the budget ~1.5x current size. Prose rules only reach agents that read them; hooks reach all of them.
 3. **Route lessons, don't hoard them.** A dated "what we learned on 2026-XX-XX" list is a journal entry, not an instruction. If it changes future behavior, distill the rule (1 line, no date, no story) and drop the narrative.
-4. **Audit facts on revision.** Any pass that touches AGENTS.md should spot-check claims naming paths, env vars, scripts, or workflows against HEAD — stale facts mislead agents more than missing ones. Machine-managed blocks (e.g. `bv-agent-instructions`) can be condensed, but keep their sentinel markers so the owning tool doesn't re-inject the full text.
+4. **Audit facts on revision.** Stale facts mislead agents more than missing ones. The same script checks every path-like token (inline code and fenced blocks) against the filesystem and the first word of every shell command against PATH; `--all` includes nested instruction files in a monorepo. `--no-relative` audits a global rulebook (a dotfiles `CLAUDE.md` or `AGENTS.md` that describes other repos, machines and the vault): relative-path checks off, everything else on.
+
+   | Finding | Meaning | Severity |
+   |---|---|---|
+   | `STALE file:line path` | exists neither at the root, nor beside the instruction file, nor as a path suffix anywhere under the root | hard, exit 1 |
+   | `BUDGET file lines/N` | over the declared budget | hard, exit 1 |
+   | `NOCMD file:line cmd` | first word of a command is not on PATH nor in `.venv/bin` / `node_modules/.bin` beside the file or at the root | advisory; `--strict` fails |
+   | `NOHEADER file` | no `<N>-line budget` contract header (a budget line saying `N lines` also counts) | advisory |
+
+   Fix a STALE by correcting or deleting the claim. Reserve `--ignore ERE` for intentional non-paths the built-in placeholder list misses (`_v2`, `_backup`, `xxx`, `…`, `<name>`). Run it inside a working checkout, never a `git archive` extract, which lacks gitignored paths and reports them STALE. Blind spots, by design: tree listings (`├──`, `|--`) are skipped; git subcommand fragments quoted as prohibitions (`clean -fd`, `worktree add`) are not treated as commands; a relative path whose first segment is gone and that has no file extension is skipped; `~/` paths are facts about this machine only. Machine-managed blocks (e.g. `bv-agent-instructions`) can be condensed, but keep their sentinel markers so the owning tool doesn't re-inject the full text.

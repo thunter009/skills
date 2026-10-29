@@ -27,11 +27,14 @@ Use when:
 - Prefer small fixes at the right ownership boundary; no refactor unless it clearly improves the bug class.
 - When an accepted finding shows a bug class or repeated pattern, inspect the current PR scope for sibling instances before fixing.
 - Fix the scoped bug class at once when practical; stop at touched surfaces, owner boundaries, and clear follow-up territory.
-- Keep going until structured review returns no accepted/actionable findings.
+- Run one substantive review, verifying its findings against real code. Fix accepted defects and check the affected behavior; do not chase a cosmetically clean verdict or repeat the full review for informational observations. Preserve unresolved-HIGH merge gates and explicitly record any remaining accepted findings.
 - **Contradiction rule:** when a round's finding contradicts an earlier round's finding on the same claim — including a finding that would reverse a fix you already applied — do not apply either side on reviewer authority alone. Pin the claim to a checkable primary source first (tool `--help` text, official docs, a reproduction command you run yourself); the reviewer asserting it "is documented" is not a source until you verify the citation. If no such source settles it, record the claim as unverified and shape the code/doc to be safe under both readings. (Origin: a 2026-07 review loop flip-flopped 4 rounds on whether gh-stack stack/PR numbers can collide; it converged only when a round cited `gh stack link --help` verbatim — "stack and PR numbers never overlap" — and the orchestrator verified it.)
-- If a review-triggered fix changes code, rerun focused tests and rerun the structured review helper.
+- **Carry rejections forward:** when you reject a finding on primary evidence, record it in a rejected-findings file and pass that file to every later round with `--rejected-findings` (see Multi-Round Reviews). A settled claim then needs new evidence before it comes back. (Origin: PR 380, 2026-09-14: rounds 6 and 7 each re-raised a false P1, and each cost a full verify cycle.)
+- **UNVERIFIED findings:** the helper moves a finding to `unverified_findings` when its `quoted_code` is not within 10 lines of the cited line or in that file's diff. It prints the finding as `[UNVERIFIED P1]` and does not count it toward the exit code. Read the cited location once. If the claim holds on the real code, treat it as a normal finding; if not, add it to the rejected-findings file. Do not rerun the review only to clear it.
+- After a fix, rerun affected tests and review the fix against the accepted finding. Use a focused helper recheck for materially changed behavior or unresolved risk; repeat the full review only when scope or risk expands. If publishing evidence for a new head, the recheck must cover the intervening changes and clearly state its scope; never relabel an old result as current.
 - For security-audit suppression changes, verify accepted findings remain auditable: suppressed findings stay in structured output, active output keeps an unsuppressible suppression notice, and aggregate findings cannot hide unrelated active risk.
 - Never switch or override the requested review engine/model. If the review hits model capacity, retry the same command a few times with the same engine/model.
+- If the helper stops with `codex engine failed: codex is not logged in, or its login expired`, run `codex logout`, then `codex login`, then rerun the same command. A retry without a new login fails the same way.
 - Be patient with large bundles. Structured review can take up to 30 minutes while the model call is active, especially with Codex tools or web search.
 - Treat heartbeat lines like `review still running: ... elapsed=... pid=...` as healthy progress, not a hang. Let the helper continue while heartbeats are advancing. Pass `--stream-engine-output` when live engine text is useful; Codex and Claude filter tool/file chatter, other engines pass raw output through.
 - Do not kill a review just because it has been quiet for 2-5 minutes, or because it is still running under the 30-minute window. Inspect the process only after missing multiple expected heartbeats, after 30 minutes, or after an obviously failed subprocess; prefer letting the same helper command finish.
@@ -93,6 +96,28 @@ clean `main` against `origin/main` is usually an empty diff after push. For a
 small stack, review each commit explicitly or review the branch before merging
 with `--base`.
 
+## Multi-Round Reviews
+
+After each round, append every finding you rejected to one JSON file. Pass that file to every later round:
+
+```json
+[
+  {
+    "claim": "Prompt reads 'Run downloads-triage skill on'",
+    "evidence": "grep -n shows line 42 reads 'Run the downloads-triage skill on'",
+    "location": "skills/downloads-triage/SKILL.md:42"
+  }
+]
+```
+
+```bash
+~/.claude/skills/autoreview/scripts/autoreview --mode branch --base origin/dev --rejected-findings /tmp/rejected.json
+```
+
+- Each entry needs exactly `claim`, `evidence`, and `location` (`file:line`). The helper refuses any other shape before it starts the engine.
+- `evidence` must be primary: a command you ran and its output, a test result, or a verbatim doc citation. Do not write "the reviewer was wrong".
+- The prompt tells the reviewer not to re-raise a listed claim without new evidence. This is an instruction to the model. The helper does not filter the output, so verify a re-raised claim like any other finding.
+
 ## Parallel Closeout
 
 Format first if formatting can change line locations. Then it is OK to run tests and review in parallel:
@@ -106,6 +131,43 @@ semantics used by Python `shell=True`. Use `--parallel-tests-shell powershell`
 or `--parallel-tests-shell pwsh` when the focused test command is PowerShell-specific.
 
 Tradeoff: tests may force code changes that stale the review. If tests or review lead to code edits, rerun the affected tests and rerun review until no accepted/actionable findings remain. Once that rerun exits cleanly, stop; do not spend another long review cycle on redundant confirmation.
+
+## Long runs under an agent harness
+
+A review can run for 5-30 minutes. Agent harnesses stop long commands before that:
+
+- Claude Code killed a foreground run at 2 minutes (exit 143) on 2026-09-02. It also killed `run_in_background: true` at 2 minutes (a private data repo, 14 review rounds).
+- Claude Code on 2026-10-28 moves a foreground command to the background at 2 minutes. It stops that command at 30 minutes.
+
+Run the helper with `--detach`. It starts the review in a new session, prints the pid and log path, and exits 0 at once:
+
+```bash
+~/.claude/skills/autoreview/scripts/autoreview --detach --log /tmp/autoreview.log --mode branch --base origin/dev --json-output /tmp/review.json
+# autoreview detached: pid=72333 log=/tmp/autoreview.log
+# done when the log's last line is AUTOREVIEW_EXIT=<status> (0 = clean)
+```
+
+- The helper calls `setsid(2)` through Python. This works on macOS, which has no `setsid` command. A kill of the caller's process group does not reach the review.
+- The log holds all helper output, heartbeats included. Its last line is `AUTOREVIEW_EXIT=<status>`: `0` = clean, `1` = findings or a failure. Read the log to tell which.
+- `--log` is optional. The default is a new temp file. The helper truncates the log at launch, so a reused path holds no stale marker. It refuses a log inside the repository, because a local review would bundle that file.
+- Read findings from `--json-output`, not from the log.
+
+Wait in one background watch, not in repeated foreground polls. In Claude Code, use `run_in_background: true` or Monitor:
+
+```bash
+pid=72333; while kill -0 "$pid" 2>/dev/null; do sleep 15; done; tail -n 40 /tmp/autoreview.log
+```
+
+The loop also ends when the review dies. A log without a final `AUTOREVIEW_EXIT=` line means that the review died. If the harness stops the watch, the review continues; start a new watch.
+
+Without `--detach` (an older deployed helper), detach by hand. Keep the single quotes, so that `$?` expands in the inner shell:
+
+```bash
+LOG=/tmp/autoreview.log nohup bash -c '~/.claude/skills/autoreview/scripts/autoreview --mode branch --base origin/dev >"$LOG" 2>&1; echo "AUTOREVIEW_EXIT=$?" >>"$LOG"' </dev/null >/dev/null 2>&1 &
+```
+
+- Do not put `setsid` in front on macOS. The command does not exist, `>/dev/null 2>&1` hides the error, and no review starts.
+- This run stays in the caller's process group. On Linux, `setsid -f bash -c '…'` moves it out. `--detach` does this on both systems.
 
 ## Review Panels
 
@@ -187,9 +249,12 @@ The helper:
 - use `--mode commit --commit <ref>` for already-committed work, especially clean `main` after landing
 - should be left in `--mode auto` or forced to `--mode branch` for PR/branch work; do not force `--mode local` after committing
 - writes only to stdout unless `--output`, `--json-output`, or live streamed engine stderr is set
-- supports `--dry-run`, `--parallel-tests`, `--parallel-tests-shell`, `--prompt`, `--prompt-file`, `--dataset`, `--no-tools`, `--no-web-search`, and commit refs
+- supports `--dry-run`, `--parallel-tests`, `--parallel-tests-shell`, `--prompt`, `--prompt-file`, `--dataset`, `--rejected-findings`, `--no-tools`, `--no-web-search`, and commit refs
+- asks for each finding's `quoted_code`, checks it against the cited location and the diff (whitespace-insensitive, `...` skips text), and moves a finding whose quote is absent to `unverified_findings`
+- stops Codex on its first login error line (expired, revoked, or missing login) and prints the `codex logout` / `codex login` fix, instead of waiting through minutes of retries
 - supports `--stream-engine-output` or `AUTOREVIEW_STREAM_ENGINE_OUTPUT=1` for live engine text while preserving structured validation; Codex and Claude hide tool/file event details, emit compact activity summaries, and report usage at turn completion
 - supports opt-in review panels with `--panel` / `--reviewers`, plus per-engine `--model` and `--thinking`
+- supports `--detach` and `--log` for a review that must outlive the calling command (see Long runs under an agent harness)
 - allows read-only tools and web search by default where the selected CLI supports them; forbids nested review in the prompt; Codex is run through `codex exec` with read-only sandbox and structured output
 - prints `review still running: <engine> elapsed=<seconds>s pid=<pid>` to stderr at long-running intervals while waiting for the selected review engine, unless streamed output or compact Codex activity has been visible recently
 - prints `autoreview clean: no accepted/actionable findings reported` when the selected review command exits 0

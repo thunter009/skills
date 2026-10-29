@@ -46,14 +46,14 @@ divergence: any generic cherry-pick, API rebase-merge, or rebase-forward fallbac
 ## Why velocity-gated cadence
 
 Tick often, but cut only when integration is at least five patch-unique commits ahead of
-production, or at least four hours have elapsed and one patch-unique commit is waiting:
+production, or at least 30 minutes have elapsed and one patch-unique commit is waiting:
 
 ```bash
 git fetch origin
 N=$(git rev-list --count --right-only --cherry-pick "origin/$PROD...origin/$INT")
 LAST=$(git log -1 --format=%ct "origin/$PROD")
-AGE_H=$(( ($(date +%s) - LAST) / 3600 ))
-# cut iff N >= 5 OR (AGE_H >= 4 AND N >= 1)
+AGE_MIN=$(( ($(date +%s) - LAST) / 60 ))
+# cut iff N >= 5 OR (AGE_MIN >= 30 AND N >= 1)
 ```
 
 A fixed interval over-releases quiet periods and under-releases busy ones. A deferred tick is the
@@ -108,7 +108,7 @@ not permission to degrade the merge method.
 
 ### 3. Apply the velocity and linear-history gates
 
-When no release PR is open, evaluate `N` and `AGE_H`. If the velocity gate passes, require no merge
+When no release PR is open, evaluate `N` and `AGE_MIN`. If the velocity gate passes, require no merge
 commits in `origin/$PROD..origin/$INT` and re-run the exact ancestry check immediately before the
 cut. Any failed or indeterminate read stops the cycle.
 

@@ -16,9 +16,15 @@ Outputs (all optional, combinable):
                        background-work, duplicate, not-a-canvas, misfiled,
                        unexported, archivable). Never deletes.
   --json               machine-readable dump of the scan
+  --repair-titles      list notes whose title an old `● Decisions ← <caller>` pane
+                       name replaced, with the heading title to restore; --apply
+                       writes meta.json (backup first), --derive covers headings
+                       without a date
 
 Status rule: a canvas is RESOLVED when it contains an element whose id starts
-with `resolution` or whose Card title starts with `✅`. Everything else is OPEN.
+with `resolution` or whose Card title starts with `✅`. It is ANSWERED when
+state.json shows the user touched it (see `answer_evidence`). Everything else
+is OPEN.
 """
 
 from __future__ import annotations
@@ -119,6 +125,36 @@ def _descendant_ids(elements: dict, root: str | None) -> list[str]:
     return out
 
 
+def heading_title(body: dict) -> str:
+    """Text of the canvas's top Heading, without the ✅ a Resolution adds."""
+    elements = body.get("elements", {}) or {}
+    for eid in (elements.get(body.get("root"), {}) or {}).get("children", []) or []:
+        el = elements.get(eid, {}) or {}
+        if el.get("type") == "Heading":
+            return str((el.get("props") or {}).get("text", "")).removeprefix("✅").strip()
+    return ""
+
+
+def answer_evidence(live_state: object, state_mtime: float | None, seed: dict, created: str | None) -> str:
+    """Did the user touch this canvas? The seed pre-selects every answer, so
+    seed values alone cannot tell an accept-all from a canvas nobody opened.
+
+    no-state       no state.json: atrium writes it on the first user edit
+    edited         a value or note differs from the seed
+    seed-unconfirmed  equals the seed: a disk write is not submission evidence
+    """
+    if not isinstance(live_state, dict) or state_mtime is None:
+        return "no-state"
+    if any((v or "") != (seed.get(k) or "") for k, v in live_state.items()):
+        return "edited"
+    # Atrium's legacy renderer can write the seed when it first renders, even
+    # long after creation. A copied or restored state file is equally
+    # indistinguishable from an untouched canvas, so mtime cannot prove the
+    # user accepted every default. An explicit reply or submission is required
+    # before an agent may act on a seed-equal state.
+    return "seed-unconfirmed"
+
+
 def load_canvas(note_dir: Path) -> dict | None:
     meta_p = note_dir / "meta.json"
     if not meta_p.exists():
@@ -128,7 +164,8 @@ def load_canvas(note_dir: Path) -> dict | None:
         body_p = note_dir / "note.canvas.json"
         body = json.loads(body_p.read_text()) if body_p.exists() else {}
         state_p = note_dir / "state.json"
-        live_state = json.loads(state_p.read_text()) if state_p.exists() else {}
+        live_state = json.loads(state_p.read_text()) if state_p.exists() else None
+        state_mtime = state_p.stat().st_mtime if live_state is not None else None
     except (json.JSONDecodeError, OSError) as e:
         print(f"warn: skipping {note_dir.name}: {e}", file=sys.stderr)
         return None
@@ -139,10 +176,19 @@ def load_canvas(note_dir: Path) -> dict | None:
     # drops every user note. Measured 2026-09-23 over one workspace's 193
     # canvases: reading state.json changed 45 answers and 27 notes in 44 of
     # them. Live wins; the seed fills keys the user never touched.
-    state: dict = {**(body.get("state", {}) or {}), **(live_state if isinstance(live_state, dict) else {})}
+    seed: dict = body.get("state", {}) or {}
+    state: dict = {**seed, **(live_state if isinstance(live_state, dict) else {})}
+    evidence = answer_evidence(live_state, state_mtime, seed, meta.get("createdAt"))
 
-    title = meta.get("title", "")
+    note_title = meta.get("title", "")
+    title = note_title
     m = TITLE_RE.match(title)
+    if not m:
+        # An old `● Decisions ← <caller>` pane name can replace the note title
+        # (bd-k5tm, 86 notes on 2026-10-21). The heading keeps the created title.
+        heading = heading_title(body)
+        if TITLE_RE.match(heading):
+            title, m = heading, TITLE_RE.match(heading)
     topic = m.group("topic") if m else title.removeprefix("Decisions:").strip()
     date = m.group("date") if m else (meta.get("createdAt") or "")[:10]
 
@@ -224,10 +270,11 @@ def load_canvas(note_dir: Path) -> dict | None:
         if "provenance" in eid.lower() and el.get("type") == "Text":
             provenance = (el.get("props", {}) or {}).get("content", "")
 
-    answered = any(q["chosen"] not in (None, "") for q in questions)
+    answered = evidence == "edited" and any(q["chosen"] not in (None, "") for q in questions)
     return {
         "id": meta.get("id", note_dir.name),
         "title": title,
+        "note_title": note_title,
         "topic": topic,
         "date": date,
         "folder": meta.get("folder", ""),
@@ -240,6 +287,7 @@ def load_canvas(note_dir: Path) -> dict | None:
         "origin_pane": meta.get("originAgentPaneId"),
         "questions": questions,
         "answered": answered,
+        "answer_evidence": evidence,
         "resolution": resolution,
         "status": "resolved" if resolution else ("answered" if answered else "open"),
         "provenance": provenance,
@@ -417,7 +465,16 @@ def export_vault(canvases: list[dict], vault_dir: Path, workspace: str, today: s
     dec.mkdir(parents=True, exist_ok=True)
     written, unchanged = [], []
     assign_vault_filenames(canvases)
+    # A canvas keeps the file it was first exported to. A corrected topic would
+    # otherwise mint a second ADR beside the first and break [[links]] to it.
+    exported = {}
+    for f in sorted(dec.glob("*.md")):
+        nid = stored_note_id(f) if f.name != "_index.md" else None
+        if nid:
+            exported.setdefault(nid, f.name)
     for c in canvases:
+        if c["id"] in exported:
+            c["vault_file"] = exported[c["id"]]
         fname = c["vault_file"]
         p = dec / fname
         if p.exists() and stored_note_id(p) != c["id"]:
@@ -523,6 +580,83 @@ def sweep_tiers(canvases: list[dict], misfiled: list[dict], stale_days: int, arc
     return tiers
 
 
+# An old decision-canvas recipe named the notepad `● Decisions ← <caller>`
+# (also ✅, 🗳, ⏸). That name can replace the note title (bd-k5tm).
+PANE_NAME_TITLE_RE = re.compile(r"^\W+\s.*←")
+
+
+def title_repairs(canvases: list[dict], derive: bool) -> list[dict]:
+    """Planned meta.json title fixes: {id, path, old, new, source}.
+
+    The heading keeps the created title. With `derive`, a heading without a date,
+    or no heading at all, gives `Decisions: <heading or caller> (<created date>)`.
+    """
+    plan = []
+    for c in canvases:
+        old = c["note_title"]
+        if not PANE_NAME_TITLE_RE.match(old) or TITLE_RE.match(old):
+            continue
+        new, source = (c["title"], "heading") if TITLE_RE.match(c["title"]) else (None, None)
+        if new is None and derive and c["created"]:
+            subject = heading_title(json.loads((Path(c["path"]) / "note.canvas.json").read_text())) if c["has_canvas"] else ""
+            subject = subject or old.split("←", 1)[1].strip()
+            new, source = f"Decisions: {subject} ({c['created'][:10]})", "derived"
+        plan.append({"id": c["id"], "path": c["path"], "old": old, "new": new, "source": source})
+    return plan
+
+
+def notepad_panes() -> dict[str, list[tuple[str, str]]]:
+    """note id -> [(pane id, pane name)] for every live notepad that shows it."""
+    shown = {}
+    for path in Path(os.environ.get("ATRIUM_DATA_DIR", os.path.expanduser("~/.atrium"))).glob("workspaces/*/workspace.json"):
+        try:
+            doc = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        for pid, rec in (doc.get("panes") or {}).items():
+            nid = (rec.get("state:notepad-state") or {}).get("currentNoteId")
+            if nid:
+                shown[pid] = nid
+    out = collections.defaultdict(list)
+    for pane in json.loads(atrium("pane", "list", "--json")):
+        if pane.get("type") == "notepad" and pane.get("id") in shown:
+            out[shown[pane["id"]]].append((pane["id"], pane.get("name") or ""))
+    return out
+
+
+def apply_title_repairs(plan: list[dict], backup: Path) -> list[str]:
+    """Write each new title into meta.json after a full backup; rename open panes too.
+
+    A notepad still named the old way could copy its name back into the title,
+    so it is renamed to the restored title.
+    """
+    todo = [r for r in plan if r["new"]]
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    backup.write_text(json.dumps(todo, indent=2, ensure_ascii=False))
+    done = []
+    for r in todo:
+        meta_p = Path(r["path"]) / "meta.json"
+        meta = json.loads(meta_p.read_text())
+        if meta.get("title") != r["old"]:
+            print(f"warn: {r['id'][:8]} title changed since the plan; skipped", file=sys.stderr)
+            continue
+        meta["title"] = r["new"]
+        fd, tmp = tempfile.mkstemp(dir=meta_p.parent, prefix=".meta.", suffix=".json")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(meta, indent=2, ensure_ascii=False))
+        os.replace(tmp, meta_p)
+        done.append(r["id"])
+    panes = notepad_panes()
+    for r in todo:
+        if r["id"] not in done:
+            continue
+        for pid, name in panes.get(r["id"], []):
+            if PANE_NAME_TITLE_RE.match(name):
+                atrium("pane", "rename", pid, "--name", r["new"])
+                print(f"renamed pane {pid[:8]} -> {r['new']}", file=sys.stderr)
+    return done
+
+
 def write_note_body(nid: str, md: str) -> None:
     """`note write` accepts --content/--from-file/stdin; a temp file sidesteps argv limits and stdin ambiguity."""
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
@@ -566,10 +700,26 @@ def main() -> None:
     ap.add_argument("--stale-days", type=int, default=30)
     ap.add_argument("--archive-days", type=int, default=90)
     ap.add_argument("--json", action="store_true", help="dump scan as JSON to stdout")
+    ap.add_argument("--repair-titles", action="store_true", help="plan meta.json title fixes for notes renamed by an old pane name (bd-k5tm)")
+    ap.add_argument("--derive", action="store_true", help="with --repair-titles: derive a title when the heading has no date")
+    ap.add_argument("--apply", action="store_true", help="with --repair-titles: write the titles (backup first)")
+    ap.add_argument("--backup", metavar="FILE", help="with --apply: backup path (default ~/.local/state/decision-canvas/title-repair-<ts>.json)")
     a = ap.parse_args()
 
     workspace = resolve_workspace(a.workspace)
     canvases, misfiled = scan(Path(a.notes_root), workspace)
+    if a.repair_titles:
+        plan = title_repairs(canvases + misfiled, a.derive)
+        for r in plan:
+            print(f"{r['id'][:8]}\t{r['source'] or 'none'}\t{r['old']}\t→ {r['new'] or '(no usable title; --derive)'}")
+        if a.apply:
+            stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup = Path(os.path.expanduser(a.backup or f"~/.local/state/decision-canvas/title-repair-{workspace[:8]}-{stamp}.json"))
+            done = apply_title_repairs(plan, backup)
+            print(f"repaired {len(done)} of {len(plan)} titles; backup → {backup}", file=sys.stderr)
+        else:
+            print(f"dry-run: {sum(1 for r in plan if r['new'])} of {len(plan)} repairable; add --apply to write", file=sys.stderr)
+        return
     now = dt.datetime.now(dt.timezone.utc)
     today = now.date().isoformat()
     vault_dir = Path(os.path.expanduser(a.export_vault)) if a.export_vault else None

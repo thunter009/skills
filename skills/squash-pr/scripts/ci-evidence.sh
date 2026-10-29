@@ -16,11 +16,12 @@
 #
 # ── design notes, each one load-bearing ──────────────────────────────────────────────────
 #
-# SAME SNAPSHOT AS LEG 3. This reads `statusCheckRollup` — the very field the green leg reads
-# — instead of the `actions/runs` API. Two sources meant two moments: a run could be queued
-# and visible to `actions/runs` while absent from the rollup, so the green leg saw nothing
-# pending, this leg saw a queued run, and both passed on a PR that had not been validated. One
-# snapshot cannot disagree with itself.
+# SAME SOURCE AS LEG 3, AT THE HEAD SHA. This reads `actions/runs?head_sha=<head>`, the API
+# ci-verdict.sh (the green leg) reads its jobs from. It used to read `statusCheckRollup`, but a
+# fine-grained PAT cannot hold Checks permission, so the rollup failed on every PR there
+# (dev-box, 2026-10-26..29: the squash loop skipped every PR). Legs that read different APIs
+# describe different moments: a queued run visible to one and absent from the other let both
+# pass on a PR that had not been validated. One API at one head cannot disagree with itself.
 #
 # COMPLETED ONLY. An in-flight run is not evidence that CI ran, it is evidence that CI is
 # running. Refusing costs one tick — the loop re-evaluates on its next cycle and the PR lands
@@ -52,7 +53,8 @@
 #   CI_EVIDENCE_FIXTURE_DIR=<dir> ci-evidence.sh <pr-number>   # offline; see tests/
 #
 # Fixture dir contents:
-#   rollup.json   the `statusCheckRollup` array from `gh pr view N --json statusCheckRollup`
+#   rollup.json   rows {status, conclusion, detailsUrl, name} — the live path builds one row
+#                 per workflow run at the head (html_url as detailsUrl, workflow name as name)
 set -uo pipefail
 
 MIN=1
@@ -96,12 +98,31 @@ else
   command -v gh >/dev/null 2>&1 || { echo "INDETERMINATE: gh not on PATH" >&2; exit 3; }
   command -v jq >/dev/null 2>&1 || { echo "INDETERMINATE: jq not on PATH" >&2; exit 3; }
   R=(); [ -n "$REPO" ] && R=(--repo "$REPO")
-  ROLLUP="$(gh pr view "$PR" "${R[@]}" --json statusCheckRollup -q '.statusCheckRollup' 2>/dev/null)" || {
-    emit INDETERMINATE "cannot read statusCheckRollup for #$PR"; exit 3; }
+  GH_ERR="$(mktemp "${TMPDIR:-/tmp}/ci-evidence-err.XXXXXX")"
+  trap 'rm -f "$GH_ERR"' EXIT
+  if [ -z "$REPO" ]; then
+    REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" || {
+      emit INDETERMINATE "cannot resolve repo; pass --repo"; exit 3; }
+  fi
+  HEAD="$(gh pr view "$PR" "${R[@]}" --json headRefOid -q .headRefOid 2>"$GH_ERR")"
+  [[ "$HEAD" =~ ^[0-9a-f]{40}$ ]] || { emit INDETERMINATE "cannot read the head of #$PR"; exit 3; }
+  # One row per workflow run at the head, in the rows shape the counting below reads.
+  ROLLUP="$(gh api --paginate --slurp "repos/$REPO/actions/runs?head_sha=$HEAD&per_page=100" 2>"$GH_ERR" \
+    | jq -c '[ .[].workflow_runs[]
+               | { name, status: (.status // "" | ascii_upcase),
+                   conclusion: (.conclusion // "" | ascii_upcase), detailsUrl: .html_url } ]')" || {
+    # Name a permission gap: a token without Actions: Read cannot list runs.
+    if grep -q 'Resource not accessible by' "$GH_ERR"; then
+      emit INDETERMINATE "token lacks Actions:read — cannot list workflow runs at ${HEAD:0:12} for #$PR (atrium-loops scripts/check-gh-token.sh)"
+    else
+      emit INDETERMINATE "cannot read workflow runs at ${HEAD:0:12} for #$PR"
+    fi
+    exit 3; }
+  rm -f "$GH_ERR"
 fi
 
 echo "$ROLLUP" | jq -e 'type=="array"' >/dev/null 2>&1 || {
-  emit INDETERMINATE "statusCheckRollup is not an array"; exit 3; }
+  emit INDETERMINATE "workflow run list is not an array"; exit 3; }
 
 # Distinct Actions workflow-run ids whose check COMPLETED with a conclusion that means the
 # work actually happened. SKIPPED/CANCELLED validated nothing; anything else (SUCCESS,
@@ -111,7 +132,7 @@ RUN_IDS="$(echo "$ROLLUP" | jq -r '
     | select((.status // "") == "COMPLETED")
     | select(((.conclusion // "") | ascii_upcase) as $c | $c != "SKIPPED" and $c != "CANCELLED")
     | (.detailsUrl // .targetUrl // "")
-    | capture("/actions/runs/(?<id>[0-9]+)")?.id
+    | (capture("/actions/runs/(?<id>[0-9]+)")? | .id)
   ] | map(select(. != null)) | unique')"
 
 COUNT="$(echo "$RUN_IDS" | jq 'length')"

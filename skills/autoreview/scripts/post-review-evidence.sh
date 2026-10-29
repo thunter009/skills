@@ -57,6 +57,7 @@ fi
 
 # --- compose ------------------------------------------------------------------------------
 N_FIND="$(jq '.findings | length' "$FROM")"
+N_UNVERIFIED="$(jq '.unverified_findings // [] | length' "$FROM")"
 OVERALL="$(jq -r '.overall_correctness // "unknown"' "$FROM")"
 EXPL="$(jq -r '.overall_explanation // ""' "$FROM")"
 CONF="$(jq -r '.overall_confidence // empty' "$FROM")"
@@ -90,6 +91,11 @@ trap 'rm -f "$BODY_FILE"' EXIT
     printf '**No findings after checking:** '
     for i in "${!FILES[@]}"; do [ "$i" -gt 0 ] && printf ', '; printf '%s' "${FILES[$i]}"; done
     printf '\n\n'
+  fi
+  if [ "$N_UNVERIFIED" -gt 0 ]; then
+    printf '**Unverified (%s, quoted code not at the cited location; not counted as open)**\n' "$N_UNVERIFIED"
+    jq -r '.unverified_findings[] | "- [UNVERIFIED \(.priority // "P?")] `\(.code_location.file_path // "?"):\(.code_location.line // 0)` — \(.title // "untitled")"' "$FROM"
+    printf '\n'
   fi
   [ -n "$EXPL" ] && printf '**Overall:** %s' "$EXPL"
   [ -n "$CONF" ] && printf ' (confidence %s)' "$CONF"

@@ -85,7 +85,7 @@ The map is deliberately incomplete — don't chart what you can't yet see. Beyon
 1. Load the **map body** — the low-res view, not every ticket.
 2. Choose the ticket: the one the user named, else the first frontier ticket from `br ready --parent <map-id> --unassigned`. **Claim it** (`br update <id> --assignee <you>`).
 3. Resolve it — zoom into related/closed tickets on demand (`br show <id>`); invoke the skills the Notes block names; default to `grilling` + `domain-modeling`.
-4. Record: post the answer with `br comments <id> add`, `br close <id>`, and append a one-line pointer to the map's Decisions-so-far.
+4. Record: post the answer with `br comments add <id> -m "<answer>"` (subcommand before the id; `br comments <id> add "<text>"` fails as `Issue not found: <text>`), `br close <id>`, and append a one-line pointer to the map's Decisions-so-far.
 5. Graduate any fog the answer sharpened into new tickets (create-then-wire); if the answer reveals a ticket sits beyond the destination, rule it out of scope (close it, one line under Out-of-scope) rather than resolving it.
 6. **When the frontier is empty and no fog remains, the map is done** — the route is clear. Hand off to `route-build-mode` to pick execution mode, then the relevant build skill. Don't roll into building inside the same session.
 

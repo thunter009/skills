@@ -114,6 +114,22 @@ expect "$RC" 3 "malformed head SHA => INDETERMINATE"
 OUT="$(CI_VERDICT_FIXTURE_DIR=/nonexistent bash "$GUARD" 999 2>&1)"; RC=$?
 expect "$RC" 3 "missing fixture dir => INDETERMINATE"
 
+# ── 9b. Classic branch protection is a required-context source ───────────
+# /rules/branches/ returns [] under classic protection (probe 2026-09-15).
+D="$(mkfix classic '[]' "[$(cr 10 verify completed '"failure"')]")"
+printf '{"protection":{"required_status_checks":{"checks":[{"context":"verify","app_id":15368}]}}}' > "$D/branch.json"
+run "$D"
+expect "$RC" 1 "classic-only required check failing => not green"
+contains "$OUT" "FAILED verify" "classic required context is evaluated"
+D="$(mkfix classicany '[]' "[$(cr 10 verify completed '"success"' 999)]")"
+printf '{"protection":{"required_status_checks":{"checks":[{"context":"verify","app_id":-1}]}}}' > "$D/branch.json"
+run "$D"
+expect "$RC" 0 "classic app_id -1 => any app satisfies it"
+D="$(mkfix badbranch "$(rules verify)" "[$(cr 10 verify completed '"success"')]")"
+printf 'not json' > "$D/branch.json"
+run "$D"
+expect "$RC" 3 "unparseable branch payload => INDETERMINATE"
+
 # ── 10. Usage ────────────────────────────────────────────────────────────
 OUT="$(bash "$GUARD" 2>&1)"; RC=$?
 expect "$RC" 2 "no PR number => usage error"
@@ -136,6 +152,52 @@ if jq -e --arg h "$SHA" '.verdict == "GREEN" and .head_sha == $h and (.contexts 
 else
   bad "--json output wrong: $OUT"
 fi
+
+# ── 12. What a token without Checks permission cannot see ───────────────
+# A fine-grained PAT cannot hold Checks permission, so the live path reads Actions jobs
+# (dev-box, 2026-10-29). A required context it cannot observe is never GREEN or UNTRIGGERED.
+UNPINNED='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"verify"},{"context":"third-party"}]}}]'
+run "$(mkfix unmapped "$UNPINNED" "[$(cr 10 verify completed '"success"')]" '[]')"
+expect "$RC" 3 "unpinned required context with no job and no status => INDETERMINATE"
+contains "$OUT" "third-party" "INDETERMINATE names the unmapped context"
+run "$(mkfix unmapped-running "$UNPINNED" "[$(cr 10 verify in_progress null)]" '[]')"
+expect "$RC" 1 "unmapped while another run is in flight => PENDING (exit 1)"
+contains "$OUT" "PENDING" "unmapped context waits while runs are in flight"
+OTHERAPP='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"verify","integration_id":15368},{"context":"scan","integration_id":999}]}}]'
+run "$(mkfix unobservable "$OTHERAPP" "[$(cr 10 verify completed '"success"')]" '[]')"
+expect "$RC" 3 "required context pinned to a non-Actions app => INDETERMINATE"
+contains "$OUT" "non-Actions app" "INDETERMINATE says why it cannot see the context"
+run "$(mkfix unobservable-red "$OTHERAPP" "[$(cr 10 verify completed '"failure"')]" '[]')"
+expect "$RC" 1 "a visible failure still outranks an unobservable context"
+
+# ── 13. Live path reads Actions runs and jobs, never the Checks API ───────
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in *statusCheckRollup*|*check-runs*) echo "Checks API called: $*" >&2; exit 97 ;; esac
+case "$*" in
+  "pr view"*) printf '{"headRefOid":"%s","baseRefName":"dev"}\n' "$FAKE_HEAD" ;;
+  "api repos/o/r/rules/branches/dev") printf '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"verify","integration_id":15368},{"context":"merge-policy"}]}}]\n' ;;
+  "api repos/o/r/branches/dev") echo '{}' ;;
+  *"actions/runs?head_sha="*) pad=""; [ -n "${FAKE_PAD:-}" ] && pad="$(head -c 200000 /dev/zero | tr '\0' a)"
+    printf '[{"workflow_runs":[{"id":11,"name":"CI","status":"completed","pad":"%s"},{"id":12,"name":"Later","status":"%s"}]}]\n' "$pad" "${FAKE_RUN12:-completed}" ;;
+  *"actions/runs/11/jobs"*) printf '[{"jobs":[{"id":101,"name":"verify","status":"completed","conclusion":"%s","completed_at":"2026-10-29T00:00:00Z"}]}]\n' "${FAKE_VERIFY:-success}" ;;
+  *"actions/runs/12/jobs"*) echo '[{"jobs":[]}]' ;;
+  *"commits/"*"/status"*) echo '[{"id":7,"context":"merge-policy","state":"success"}]' ;;  # read_statuses passes --jq .statuses
+  *) echo "unexpected gh call: $*" >&2; exit 64 ;;
+esac
+EOF
+chmod +x "$TMP/bin/gh"
+OUT="$(FAKE_HEAD=$SHA PATH="$TMP/bin:$PATH" bash "$GUARD" 999 --repo o/r 2>&1)"; RC=$?
+expect "$RC" 0 "live path: Actions job + commit status satisfy the required contexts => GREEN"
+OUT="$(FAKE_HEAD=$SHA FAKE_VERIFY=failure PATH="$TMP/bin:$PATH" bash "$GUARD" 999 --repo o/r 2>&1)"; RC=$?
+expect "$RC" 1 "live path: a failed Actions job => FAILED"
+contains "$OUT" "FAILED verify" "live path names the failed job"
+OUT="$(FAKE_HEAD=$SHA FAKE_RUN12=queued PATH="$TMP/bin:$PATH" bash "$GUARD" 999 --repo o/r 2>&1)"; RC=$?
+expect "$RC" 0 "a queued run with no jobs does not block passed required contexts"
+# One private repo's head run list was 177 KB; jq --argjson hit Linux's 128 KB argv limit (2026-10-29).
+OUT="$(FAKE_HEAD=$SHA FAKE_PAD=1 PATH="$TMP/bin:$PATH" bash "$GUARD" 999 --repo o/r 2>&1)"; RC=$?
+expect "$RC" 0 "a run list over 128 KB still reads: payloads never ride argv"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

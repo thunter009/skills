@@ -34,7 +34,7 @@ You are running the `/ship` workflow. This is **non-interactive and fully automa
 - On `main`/`master` branch (abort)
 - Merge conflicts that can't be auto-resolved (stop, show conflicts)
 - Test failures (stop, show failures)
-- Pre-landing review finds CRITICAL issues (ask per-issue)
+- A verified critical issue requires a user decision; fix clear in-scope defects without another permission round
 
 **Never stop for:**
 - Uncommitted changes (always include them)
@@ -78,7 +78,7 @@ git rebase origin/$BASE
 
 ---
 
-## Step 3: Detect & Run Tests
+## Step 3: Run Applicable Checks
 
 Detect the project's test runner by checking for these markers (in priority order):
 
@@ -93,41 +93,25 @@ Detect the project's test runner by checking for these markers (in priority orde
 | `Gemfile` with `rspec` | `bundle exec rspec` |
 | `Gemfile` with `minitest` / `test/` dir | `bundle exec rails test` or `ruby -Itest` |
 
-Run all detected test suites. If multiple runners exist (e.g., pytest + pre-commit), run them in sequence.
+Use these markers to discover commands, not to require every suite. Select tests, lint, typechecks, and `ubs` covering changed code and affected interfaces, plus explicit repository gates. Docs and skill instructions usually need their validators; a localized fix needs the relevant regression checks. Broaden checks for migrations, auth, billing, data loss, shared infrastructure, or uncertain impact. Required CI still runs.
+
+Reuse passing results when their code, configuration, dependencies, and tested integration state are unchanged. A rebase or fix invalidates affected results, not every unrelated result. Record commands and results briefly in the PR; do not create a separate test ledger.
 
 **If any test fails:** Show the failures and **STOP**. Do not proceed.
 
 **If all pass:** Continue — note pass counts briefly.
 
-**If no test runner detected:** Warn the user ("No test runner detected — skipping tests") and continue.
+**If no test runner applies:** Validate the changed artifact directly and state the limit briefly in the PR.
 
 ---
 
 ## Step 4: Pre-Landing Review
 
-Review the diff for structural issues that tests don't catch. Reuses the `/pr-review` checklist.
+Use one substantive review for the change. An existing local, bot, or human review counts when its revision and scope cover what will ship; `land` does not add another review. For a trivial reversible edit, a direct diff review is sufficient unless repository policy requires more. For non-trivial work without a covering review, use `autoreview` once; do not also run a second checklist review or reviewer panel.
 
-1. Read the pr-review checklist at `skills/pr-review/references/checklist.md` (resolve relative to the skills install root). If the file cannot be read, warn and continue — do not block ship for a missing checklist.
+Verify findings against real code. Fix clear in-scope defects, rerun affected checks, and review the fixes against the accepted findings. Use a focused reviewer recheck when a fix changes material behavior or leaves uncertainty; repeat the full review only when scope or risk materially expands. Speculative or informational observations do not force another review round or a follow-up ticket.
 
-2. Run `git diff origin/$BASE...HEAD` to get the full diff.
-
-3. Apply the review checklist in two passes:
-   - **Pass 1 (CRITICAL):** SQL & Data Safety, Race Conditions & Concurrency, LLM Output Trust Boundary
-   - **Pass 2 (INFORMATIONAL):** All remaining categories
-
-4. Output a summary: `Pre-Landing Review: N issues (X critical, Y informational)`
-
-5. **If CRITICAL issues found:** For EACH critical issue, use AskUserQuestion with:
-   - The problem (`file:line` + description)
-   - Your recommended fix
-   - Options: A) Fix it now, B) Acknowledge and ship anyway, C) False positive — skip
-   If user chose A on any issue: apply fixes, stage the fixed files, then re-run tests (Step 3) to verify fixes don't break anything.
-
-6. **If only informational issues:** Output them and continue. They go into the PR body.
-
-7. **If no issues:** Output `Pre-Landing Review: No issues found.` and continue.
-
-Save review output for the PR body in Step 7.
+Preserve required human/bot reviews, head-bound PR evidence, and unresolved-HIGH merge gates. Reuse the reviewer output in the PR; if a new head needs published evidence, use a focused recheck of the intervening changes rather than presenting an old verdict as current. Ask only when a concrete decision cannot be resolved within the user's authorization; show the issue, evidence, and recommended choice together.
 
 ---
 
@@ -247,9 +231,9 @@ commit message above, and it fires after the branch is already pushed.
 
 ## Important Rules
 
-- **Never skip tests.** If test runner is detected and tests fail, stop.
+- Run applicable checks and required CI; reuse unchanged results. A relevant failing test blocks landing.
 - **Never force push.** Regular `git push` only.
-- **Never ask for confirmation** except for CRITICAL review findings (one AskUserQuestion per critical issue).
+- Ask only for a concrete unresolved decision outside existing authorization; fix clear in-scope defects directly.
 - **Split commits for bisectability** — each commit = one logical change, ordered by dependency.
 - **Merge conflicts and test failures are the only hard stops** (plus critical review issues).
 - **The goal is: user says `/ship`, next thing they see is the PR URL.**

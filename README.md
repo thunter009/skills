@@ -8,7 +8,7 @@ Install with [skills](https://github.com/vercel-labs/skills): `npx skills add th
 | Skill | Description |
 |---|---|
 | [`add-pytest-coverage`](skills/add-pytest-coverage/SKILL.md) | Add or expand pytest coverage without changing production logic. |
-| [`agents-md`](skills/agents-md/SKILL.md) | Create repo-specific AGENTS.md guardrails from the codebase. |
+| [`agents-md`](skills/agents-md/SKILL.md) | Create repo-specific AGENTS.md guardrails from the codebase; audit an existing AGENTS.md or CLAUDE.md for stale paths, dead commands, and line-budget overruns. |
 | [`autoreview`](skills/autoreview/SKILL.md) | "Run a structured code review (Codex default, Claude optional) as a closeout check on a local or PR branch before commit or ship." |
 | [`beads-linear-sync`](skills/beads-linear-sync/SKILL.md) | Sync beads and Linear so agent state and human tracker stay aligned. |
 | [`bug-hunt`](skills/bug-hunt/SKILL.md) | Run a multi-phase bug hunt with Codex, Gemini, or Claude. |
@@ -40,7 +40,7 @@ Install with [skills](https://github.com/vercel-labs/skills): `npx skills add th
 | [`improve-codebase-architecture`](skills/improve-codebase-architecture/SKILL.md) | Find module-deepening refactor opportunities for testability and AI-navigability. |
 | [`iterative-critique-polish`](skills/iterative-critique-polish/SKILL.md) | >- |
 | [`knowledge-graph-capture`](skills/knowledge-graph-capture/SKILL.md) | Before archiving consumed or reference content (videos, articles, bookmarks, finished tasks), distill its durable knowledge into applied, wikilinked evergreen n |
-| [`land`](skills/land/SKILL.md) | Pre-landing closeout — review, ubs scan, fix findings, then ship. |
+| [`land`](skills/land/SKILL.md) | Land branch changes through ship, reusing completed checks and review. |
 | [`mealie`](skills/mealie/SKILL.md) | Read and write recipes in self-hosted Mealie via its REST API without corrupting them. |
 | [`migrate-cc-command`](skills/migrate-cc-command/SKILL.md) | Convert a Claude command into a Claude Code skill. |
 | [`multi-round-research`](skills/multi-round-research/SKILL.md) | "Two-round parallel-subagent research that produces an opinionated proposal, then challenges and surpasses it. Use for deep concept exploration, design-space ma |

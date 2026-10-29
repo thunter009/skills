@@ -5,7 +5,7 @@ when-to-use:
 - bug hunt, find bugs, codex hunt, hunt for bugs
 - When you want repeated explore, fix, and review passes
 user_invocable: true
-allowed-tools: Bash(codex:*)|Bash(gemini:*)|Bash(source:*)|Bash(cat:*)|Bash(git:*)|Read|Write|Glob|Agent
+allowed-tools: Bash(codex:*)|Bash(gemini:*)|Bash(source:*)|Bash(cat:*)|Bash(git:*)|Bash(python3:*)|Read|Write|Glob|Agent
 category: code
 ---
 
@@ -351,6 +351,19 @@ falsification runs that didn't reach their own `git worktree remove` (e.g.
 an iteration errored before cleanup). Without `prune`, `git worktree list`
 accumulates ghost entries pointing at deleted directories.
 
+#### 5a. Land a multi-pane hunt as domain PRs
+
+A multi-pane hunt can land as one PR per domain: bucket every changed file into a domain by path, then build each PR from the hunt-branch tip with only that domain's files. Path bucketing misplaces a test whose path prefix does not match its subject. In a five-domain hunt (2026-09-13), `frontend/lib/__tests__/api-keys-manager.test.tsx` went to the API PR, but the component it asserted went to the shell PR. CI failed on the API PR; the assembly did not catch it.
+
+Before you open any domain PR, write the bucketing as a plan file (one `<domain><TAB><path>` line per changed file) and check it from the hunt-tip checkout:
+
+```bash
+python3 ~/.claude/skills/bug-hunt/scripts/check_domain_pr_tests.py \
+  --plan .bug-hunt/domain-plan.tsv --root .
+```
+
+The check resolves each test's JS/TS imports, `require`/`mock` targets, or Python imports against the plan's changed source files. When no import resolves, a name-stem match (`foo.test.tsx` → `foo.tsx`) stands in. Exit 1 prints a `MISMATCH` and a `move <test>: <from> -> <to>` line for each test that has a changed subject only in other domains. Move each test to the named domain, re-run until exit 0, then build the PRs. A test with no changed subject (a test-only change) passes. Exit 2 is a plan error, for example one path in two domains.
+
 ### 6. Run hunt.sh for individual iterations
 
 The bash script `~/.claude/skills/bug-hunt/scripts/hunt.sh` handles a **single iteration**
@@ -406,3 +419,4 @@ The script reads `--journal-file` and prepends its contents to the engine prompt
 
     Additionally, **check the inbox at most every 5 iterations** (between phases, never every iteration) — per-iteration polling amplifies server load and is what trips pool/fd exhaustion in the first place. Root-cause fix tracked in `mcp-agent-mail` repo (bd-9nd); this rule is the client-side mitigation (bd-j1x).
 23. **If the project's AGENTS.md tells codex to run `ubs`, scope it to specific files, not `ubs .`** — whole-project scans on non-trivial repos exceed codex's per-shell-command timeout and read as a hang from inside the sandbox. Pass an explicit file list (e.g. the paths the agent just modified in this iteration). **Gotcha:** `ubs $(some-git-command)` falls back to scanning PROJECT_DIR when the substitution is empty — the exact failure mode this rule prevents. Either guard with `[[ -n "$FILES" ]] && ubs $FILES`, or combine working-tree + iteration-commit diffs like `hunt.sh` does (`git diff --name-only` ∪ `git diff --name-only ${start_sha}..HEAD`). (Repro 2026-05-16 confirmed `ubs` itself works fine in `--sandbox workspace-write`; the apparent hangs are scan-scope/timeout, not sandbox.) `hunt.sh` also runs `prewarm_ubs.sh` before dispatch so the first iteration doesn't pay module-download cost inside the sandbox.
+24. **Check test placement before you open domain PRs** — when a hunt lands as per-domain PRs bucketed by path, run `check_domain_pr_tests.py` on the plan first (§5a). Path bucketing can send a test to one PR and its changed subject to another; a 2026-09 hunt found this twice, both times by a red CI run.

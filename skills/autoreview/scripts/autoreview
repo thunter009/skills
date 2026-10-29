@@ -7,17 +7,20 @@ import copy
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import tempfile
 import textwrap
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Callable
 
 
 ENGINES = ("codex", "claude", "droid", "copilot")
+DETACH_EXIT_MARKER = "AUTOREVIEW_EXIT="
 THINKING_LEVELS_BY_ENGINE = {
     "codex": {"low", "medium", "high", "xhigh"},
     "claude": {"low", "medium", "high", "xhigh", "max"},
@@ -48,6 +51,7 @@ SCHEMA: dict[str, Any] = {
                     "confidence",
                     "category",
                     "code_location",
+                    "quoted_code",
                 ],
                 "properties": {
                     "title": {"type": "string", "minLength": 1, "maxLength": 140},
@@ -67,6 +71,7 @@ SCHEMA: dict[str, Any] = {
                             "line": {"type": "integer", "minimum": 1},
                         },
                     },
+                    "quoted_code": {"type": "string", "maxLength": 1000},
                 },
             },
         },
@@ -78,6 +83,20 @@ SCHEMA: dict[str, Any] = {
         "overall_confidence": {"type": "number", "minimum": 0, "maximum": 1},
     },
 }
+
+# A finding's quoted_code must appear within this many lines of its cited line.
+QUOTE_WINDOW_LINES = 10
+QUOTE_ELISION = re.compile(r"\.\.\.|…")
+
+# codex logs one of these on stderr when its login is expired, revoked, or missing, then keeps
+# retrying for minutes (64-96 repeats on codex-cli 0.165.0). Both are anchored to codex's own
+# tracing prefix, so a reviewer printing this file does not match.
+CODEX_AUTH_ERROR = re.compile(
+    r"^\S+\s+ERROR\s+codex_login::\S+:\s+Failed to refresh token"
+    r"|^\S+\s+ERROR\s+codex_api::\S+:.*\b401 Unauthorized"
+)
+
+REJECTED_FINDING_KEYS = ("claim", "evidence", "location")
 
 
 def run(args: list[str], cwd: Path, *, input_text: str | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -104,15 +123,18 @@ def run_with_heartbeat(
     heartbeat_seconds: int = 60,
     stream_output: bool = False,
     stream_display: Callable[[str, str], str | None] | None = None,
+    abort_on: Callable[[str, str], str | None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    if stream_output:
+    if stream_output or abort_on:
+        # abort_on must see each line as it arrives, so it reads line by line even when hidden.
         return run_with_stream(
             args,
             cwd,
             input_text=input_text,
             label=label,
             heartbeat_seconds=heartbeat_seconds,
-            stream_display=stream_display,
+            stream_display=stream_display if stream_output else hide_output,
+            abort_on=abort_on,
         )
     started = time.monotonic()
     proc = subprocess.Popen(
@@ -137,6 +159,10 @@ def run_with_heartbeat(
             print(f"review still running: {label} elapsed={elapsed}s pid={proc.pid}", file=sys.stderr, flush=True)
 
 
+def hide_output(_name: str, _line: str) -> str | None:
+    return None
+
+
 def run_with_stream(
     args: list[str],
     cwd: Path,
@@ -145,6 +171,7 @@ def run_with_stream(
     label: str,
     heartbeat_seconds: int,
     stream_display: Callable[[str, str], str | None] | None,
+    abort_on: Callable[[str, str], str | None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     started = time.monotonic()
     proc = subprocess.Popen(
@@ -186,12 +213,14 @@ def run_with_stream(
     stdin_thread.start()
 
     open_streams = 2
+    last_visible = started
     while open_streams:
         try:
-            name, line = events.get(timeout=heartbeat_seconds)
+            name, line = events.get(timeout=max(0.0, last_visible + heartbeat_seconds - time.monotonic()))
         except queue.Empty:
             elapsed = int(time.monotonic() - started)
             print(f"review still running: {label} elapsed={elapsed}s pid={proc.pid}", file=sys.stderr, flush=True)
+            last_visible = time.monotonic()
             continue
         if line is None:
             open_streams -= 1
@@ -200,11 +229,17 @@ def run_with_stream(
             stdout_parts.append(line)
         else:
             stderr_parts.append(line)
+        abort_reason = abort_on(name, line) if abort_on else None
+        if abort_reason:
+            proc.kill()
+            proc.wait()
+            raise SystemExit(abort_reason)
         display = stream_display(name, line) if stream_display else line
         if display:
             target = sys.stdout if name == "stdout" else sys.stderr
             target.write(display)
             target.flush()
+            last_visible = time.monotonic()
 
     for thread in threads:
         thread.join()
@@ -440,7 +475,52 @@ def load_datasets(args: argparse.Namespace) -> str:
     return "\n\n".join(chunks)
 
 
-def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, extra_prompt: str, datasets: str) -> str:
+def load_rejected_findings(args: argparse.Namespace) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for spec in args.rejected_findings or []:
+        path = Path(spec)
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"--rejected-findings {path}: {exc}")
+        if not isinstance(data, list):
+            raise SystemExit(f"--rejected-findings {path}: expected a JSON array of {{claim, evidence, location}} objects")
+        for index, entry in enumerate(data):
+            if not isinstance(entry, dict):
+                raise SystemExit(f"--rejected-findings {path} entry {index} must be an object")
+            extra = sorted(set(entry) - set(REJECTED_FINDING_KEYS))
+            missing = [key for key in REJECTED_FINDING_KEYS if not isinstance(entry.get(key), str) or not entry[key].strip()]
+            if extra or missing:
+                raise SystemExit(f"--rejected-findings {path} entry {index}: missing or empty {missing}, unexpected {extra}")
+            if not re.fullmatch(r".+:[1-9][0-9]*", entry["location"].strip()):
+                raise SystemExit(f"--rejected-findings {path} entry {index}: location must be file:line, got {entry['location']!r}")
+            entries.append({key: entry[key].strip() for key in REJECTED_FINDING_KEYS})
+    return entries
+
+
+def format_rejected_findings(entries: list[dict[str, str]]) -> str:
+    if not entries:
+        return ""
+    lines = [
+        "# Rejected Findings",
+        "Earlier review rounds raised these claims. The caller checked each one against primary evidence and rejected it.",
+        "Do not report a listed claim, or a restatement of it, unless you have new evidence that the rejection evidence does not address. If you do report one, put that new evidence in the finding body.",
+    ]
+    for entry in entries:
+        lines.append(f"- {entry['location']}: {bounded_field(entry['claim'], 500)}")
+        lines.append(f"  Rejected because: {bounded_field(entry['evidence'], 1000)}")
+    return "\n".join(lines)
+
+
+def build_prompt(
+    repo: Path,
+    target: str,
+    target_ref: str | None,
+    bundle: str,
+    extra_prompt: str,
+    datasets: str,
+    rejected: str,
+) -> str:
     target_line = f"{target} {target_ref}" if target_ref else target
     return textwrap.dedent(
         f"""
@@ -460,12 +540,15 @@ def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, e
         - Include security findings: injection, secret leaks, authz/authn bypass, path traversal, unsafe deserialization, unsafe filesystem or shell use, privacy leaks, and credential handling.
         - Do not reject legitimate functionality merely because it touches shell, filesystem, network, auth, or sensitive data. Report a security finding only when the patch creates a concrete exploitable risk, removes an important safety check, or lacks validation at a trust boundary.
         - For each finding, use the smallest file/line location that demonstrates the issue.
+        - Set quoted_code to the exact source text the finding rests on, copied from the file at code_location: part of one line or several consecutive lines. Never paraphrase or retype it, and keep every word, operator, and redirect. Use "..." only to skip lines inside a longer quote. Use an empty string when the finding does not rest on specific code text. The caller checks quoted_code within {QUOTE_WINDOW_LINES} lines of code_location and in the diff; a quote that is not there marks the finding UNVERIFIED.
         - If there are no actionable findings, return an empty findings array and mark the patch correct.
 
         Review target: {target_line}
         Repository: {repo}
 
         {extra_prompt}
+
+        {rejected}
 
         {datasets}
 
@@ -511,15 +594,16 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             "-",
         ]
     )
-    result = run_with_heartbeat(
-        cmd,
-        repo,
-        input_text=prompt,
-        label="codex",
-        stream_output=args.stream_engine_output,
-        stream_display=CodexStreamDisplay() if args.stream_engine_output else None,
-    )
     try:
+        result = run_with_heartbeat(
+            cmd,
+            repo,
+            input_text=prompt,
+            label="codex",
+            stream_output=args.stream_engine_output,
+            stream_display=CodexStreamDisplay() if args.stream_engine_output else None,
+            abort_on=codex_auth_failure,
+        )
         output = output_path.read_text()
     finally:
         schema_path.unlink(missing_ok=True)
@@ -527,6 +611,16 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     if result.returncode != 0:
         raise SystemExit(f"codex engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return output or result.stdout
+
+
+def codex_auth_failure(name: str, line: str) -> str | None:
+    if name != "stderr" or not CODEX_AUTH_ERROR.search(line):
+        return None
+    return (
+        "codex engine failed: codex is not logged in, or its login expired.\n"
+        f"{line.rstrip()}\n"
+        "Fix: run `codex logout`, then `codex login`, then rerun the same autoreview command."
+    )
 
 
 def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
@@ -868,10 +962,13 @@ def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str],
     for index, finding in enumerate(report["findings"]):
         if not isinstance(finding, dict):
             raise SystemExit(f"finding {index} must be an object")
-        allowed_finding = {"title", "body", "priority", "confidence", "category", "code_location"}
+        allowed_finding = {"title", "body", "priority", "confidence", "category", "code_location", "quoted_code"}
         extra_finding = set(finding) - allowed_finding
         if extra_finding:
             raise SystemExit(f"finding {index} has unexpected keys: {sorted(extra_finding)}")
+        # Optional here: droid and copilot see the schema only as prompt text. An omitted quote
+        # equals an empty one: the check catches misquotes, it does not require a quote.
+        finding.setdefault("quoted_code", "")
         for key in allowed_finding:
             if key not in finding:
                 raise SystemExit(f"finding {index} missing required key: {key}")
@@ -889,6 +986,9 @@ def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str],
         category = finding.get("category")
         if category not in {"bug", "security", "regression", "test_gap", "maintainability"}:
             raise SystemExit(f"finding {index} has invalid category: {category}")
+        quoted_code = finding.get("quoted_code")
+        if not isinstance(quoted_code, str) or len(quoted_code) > 1000:
+            raise SystemExit(f"finding {index} has invalid quoted_code")
         location = finding.get("code_location")
         if not isinstance(location, dict):
             raise SystemExit(f"finding {index} missing code_location")
@@ -927,6 +1027,83 @@ def number_in_range(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1
 
 
+def quarantine_misquoted_findings(report: dict[str, Any], repo: Path, target: str, commit_ref: str, bundle: str) -> None:
+    """Move findings whose quoted_code is not at their cited location to unverified_findings."""
+    kept: list[dict[str, Any]] = []
+    unverified: list[dict[str, Any]] = []
+    for finding in report["findings"]:
+        location = finding["code_location"]
+        rel, line = location["file_path"], location["line"]
+        quote = finding.get("quoted_code", "")
+        if quote_found(quote, quote_haystacks(repo, target, commit_ref, bundle, rel, line, quote)):
+            kept.append(finding)
+            continue
+        flagged = copy.deepcopy(finding)
+        flagged["verification"] = f"quoted_code not found at {rel}:{line} (within {QUOTE_WINDOW_LINES} lines) or in its diff"
+        unverified.append(flagged)
+    if not unverified:
+        return
+    report["findings"] = kept
+    report["unverified_findings"] = unverified
+    if not kept and report["overall_correctness"] == "patch is incorrect":
+        note = f"Moved {len(unverified)} finding(s) to unverified_findings: quoted_code was not found at the cited location."
+        report["overall_correctness"] = "patch is correct"
+        report["overall_explanation"] = bounded_field(f"{report['overall_explanation'].rstrip()}\n\n{note}", 3000)
+
+
+def quote_haystacks(repo: Path, target: str, commit_ref: str, bundle: str, rel: str, line: int, quote: str) -> list[str]:
+    if target == "commit":
+        text = git(repo, "show", f"{commit_ref}:{rel}", check=False)
+    else:
+        try:
+            text = (repo / rel).read_text(errors="replace")
+        except OSError:
+            text = ""
+    lines = text.splitlines()
+    start = max(0, line - 1 - QUOTE_WINDOW_LINES)
+    end = line + QUOTE_WINDOW_LINES + quote.count("\n")
+    # The diff sides cover a finding that quotes removed code, e.g. a dropped safety check.
+    return ["\n".join(lines[start:end]), *diff_sides(bundle, rel)]
+
+
+def diff_sides(bundle: str, rel: str) -> tuple[str, str]:
+    """Return the old and new text of rel's hunks in the bundle, without diff markers."""
+    old: list[str] = []
+    new: list[str] = []
+    in_file = in_hunk = False
+    for line in bundle.splitlines():
+        if line.startswith("diff --git "):
+            in_file, in_hunk = line.endswith(f" b/{rel}"), False
+        elif in_file and line.startswith("@@"):
+            in_hunk = True
+        elif in_file and in_hunk:
+            marker, text = line[:1], line[1:]
+            if marker in (" ", "-"):
+                old.append(text)
+            if marker in (" ", "+"):
+                new.append(text)
+    return "\n".join(old), "\n".join(new)
+
+
+def quote_found(quote: str, haystacks: list[str]) -> bool:
+    """Whitespace-insensitive verbatim match; "..." in the quote skips text between its parts."""
+    parts = [" ".join(part.split()) for part in QUOTE_ELISION.split(quote)]
+    parts = [part for part in parts if part]
+    if not parts:
+        return True
+    for haystack in haystacks:
+        flat = " ".join(haystack.split())
+        position = 0
+        for part in parts:
+            position = flat.find(part, position)
+            if position < 0:
+                break
+            position += len(part)
+        else:
+            return True
+    return False
+
+
 def print_report(report: dict[str, Any], *, label: str = "autoreview") -> None:
     findings = report["findings"]
     if findings:
@@ -939,6 +1116,16 @@ def print_report(report: dict[str, Any], *, label: str = "autoreview") -> None:
         loc = finding["code_location"]
         print(f"[{finding['priority']}] {finding['title']}")
         print(f"{loc['file_path']}:{loc['line']}")
+        print(f"{finding['body']}")
+        print()
+    unverified = report.get("unverified_findings", [])
+    if unverified:
+        print(f"{label} unverified: {len(unverified)} finding(s) quote code that is not at the cited location; not counted as actionable")
+    for finding in unverified:
+        loc = finding["code_location"]
+        print(f"[UNVERIFIED {finding['priority']}] {finding['title']}")
+        print(f"{loc['file_path']}:{loc['line']}")
+        print(f"quoted_code: {bounded_field(finding['quoted_code'], 300)}")
         print(f"{finding['body']}")
         print()
     print(f"overall: {report['overall_correctness']} ({report['overall_confidence']})")
@@ -997,6 +1184,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", action="append", help="Additional review instruction text.")
     parser.add_argument("--prompt-file", action="append", help="Additional review instruction file.")
     parser.add_argument("--dataset", action="append", help="Extra evidence file to include in the review bundle.")
+    parser.add_argument(
+        "--rejected-findings",
+        action="append",
+        help='JSON array of [{"claim", "evidence", "location": "file:line"}] rejected in earlier rounds. The prompt tells the reviewer not to re-raise them without new evidence.',
+    )
     parser.add_argument("--output", help="Write human output to a file as well as stdout.")
     parser.add_argument("--json-output", help="Write validated structured review JSON.")
     parser.add_argument(
@@ -1015,9 +1207,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-finding", action="append", default=[], help="Require finding text to contain this substring.")
     parser.add_argument("--expect-findings", action="store_true", help="Treat findings as success; for harness acceptance tests.")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--detach",
+        action="store_true",
+        help=f"Run the review in a new session that outlives the caller, print its pid and log path, and exit 0. The log's last line is {DETACH_EXIT_MARKER}<status>.",
+    )
+    parser.add_argument("--log", help="Log file for --detach; truncated at launch, must be outside the repository. Default: a new temp file.")
+    parser.add_argument("--detached-child", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.engine not in ENGINES:
         raise SystemExit(f"invalid --engine/AUTOREVIEW_ENGINE: {args.engine}")
+    if args.log and not args.detach:
+        parser.error("--log requires --detach")
     return args
 
 
@@ -1180,9 +1381,65 @@ def run_panel(args: argparse.Namespace, reviewers: list[argparse.Namespace], rep
     return report
 
 
+def detach(args: argparse.Namespace) -> int:
+    # Agent harnesses stop a long command and its process group (Claude Code: 2 min, exit 143, in
+    # 2026-09; 30 min once backgrounded, in 2026-10). A new session (setsid(2); macOS has no setsid
+    # command) puts the review outside that group. The child re-runs these argv with
+    # --detached-child and writes the exit marker. Never waited on: outliving this process is the point.
+    repo = repo_root()
+    if args.log:
+        log_path = Path(args.log).absolute()
+        if is_within(log_path.resolve(), repo):
+            raise SystemExit(f"--log must be outside the repository; {log_path} would join the local review bundle")
+    else:
+        fd, name = tempfile.mkstemp(prefix="autoreview.", suffix=".log")
+        os.close(fd)
+        log_path = Path(name)
+    if os.name == "nt":
+        session: dict[str, Any] = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
+    else:
+        session = {"start_new_session": True}
+    with log_path.open("w") as log_handle:
+        proc = subprocess.Popen(
+            [sys.executable, "-u", str(Path(__file__).resolve()), *sys.argv[1:], "--detached-child"],
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            **session,
+        )
+    print(f"autoreview detached: pid={proc.pid} log={log_path}")
+    print(f"done when the log's last line is {DETACH_EXIT_MARKER}<status> (0 = clean)")
+    return 0
+
+
+def run_detached_child(args: argparse.Namespace, reviewers: list[argparse.Namespace]) -> int:
+    try:
+        status = review(args, reviewers)
+    except SystemExit as exc:
+        if exc.code is None or isinstance(exc.code, int):
+            status = exc.code or 0
+        else:
+            print(exc.code, file=sys.stderr)
+            status = 1
+    except Exception:
+        traceback.print_exc()
+        status = 1
+    print(f"{DETACH_EXIT_MARKER}{status}", flush=True)
+    return status
+
+
 def main() -> int:
     args = parse_args()
     reviewers = reviewer_args(args)
+    if args.detached_child:
+        return run_detached_child(args, reviewers)
+    if args.detach:
+        return detach(args)
+    return review(args, reviewers)
+
+
+def review(args: argparse.Namespace, reviewers: list[argparse.Namespace]) -> int:
+    rejected = load_rejected_findings(args)
     repo = repo_root()
     target, target_ref = choose_target(repo, args.mode, args.base)
     print(f"autoreview target: {target}")
@@ -1197,6 +1454,8 @@ def main() -> int:
         print(f"reviewers: {', '.join(reviewer_label(reviewer) for reviewer in reviewers)}")
     print(f"tools: {'on' if args.tools else 'off'}")
     print(f"web_search: {'on' if args.web_search else 'off'}")
+    if rejected:
+        print(f"rejected_findings: {len(rejected)}")
     display_ref = args.commit if target == "commit" else target_ref
     if display_ref:
         print(f"ref: {display_ref}")
@@ -1211,7 +1470,15 @@ def main() -> int:
     else:
         bundle = commit_bundle(repo, args.commit)
         target_ref = args.commit
-    prompt = build_prompt(repo, target, target_ref, bundle, load_extra_prompt(args), load_datasets(args))
+    prompt = build_prompt(
+        repo,
+        target,
+        target_ref,
+        bundle,
+        load_extra_prompt(args),
+        load_datasets(args),
+        format_rejected_findings(rejected),
+    )
     changed_paths = review_paths(repo, target, target_ref, args.commit)
     print(f"bundle: {len(prompt)} chars")
 
@@ -1225,6 +1492,7 @@ def main() -> int:
         else:
             report = run_panel(args, reviewers, repo, prompt, changed_paths)
             label = "autoreview panel"
+        quarantine_misquoted_findings(report, repo, target, args.commit, bundle)
         if args.json_output:
             Path(args.json_output).write_text(json.dumps(report, indent=2) + "\n")
 

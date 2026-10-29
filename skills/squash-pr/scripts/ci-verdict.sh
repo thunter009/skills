@@ -13,7 +13,13 @@
 # required contexts from the base branch's RULESET (`rules/branches/<base>`), then looks each
 # one up at the head SHA. A required context with no run is never green.
 #
-# PINNED TO ONE HEAD. Check runs and statuses are read for the head SHA resolved at the start,
+# ACTIONS JOBS, NOT CHECK RUNS. A fine-grained PAT cannot hold Checks permission (only GitHub
+# Apps can), so check-runs and statusCheckRollup fail on such a host (dev-box, 2026-10-29). The
+# live path lists the Actions runs at the head and their latest-attempt jobs. Each job is a
+# check run of the GitHub Actions app (15368) with the same name, id, status and conclusion,
+# so the matching below is unchanged. Check runs of other apps are invisible; see INDETERMINATE.
+#
+# PINNED TO ONE HEAD. Jobs and statuses are read for the head SHA resolved at the start,
 # never through the PR's rollup (which can describe a superseded head). The head is re-read at
 # the end; if it moved, the answer describes old code and is INDETERMINATE.
 #
@@ -23,6 +29,10 @@
 #               other run at this head is still running. A job whose `needs:` dependency is
 #               unfinished is never instantiated, so "missing" is not final until the head
 #               is quiet.
+#   INDETERMINATE (exit 3) a required context the token cannot observe: pinned to a non-Actions
+#               app ("unobservable"), or unpinned with no Actions job and no commit status
+#               ("unmapped" — it could be a non-Actions check run, which needs Checks
+#               permission to read). Never folded into GREEN.
 #   UNTRIGGERED required context(s) have no run and nothing at this head is running. Its own
 #               verdict, never folded into PENDING or GREEN: the remedy depends on the cause —
 #               stale branch → rebase onto the base; Actions outage → wait (githubstatus.com);
@@ -37,7 +47,9 @@
 #
 # NO REQUIRED CONTEXTS = INDETERMINATE, not GREEN. An empty required set makes "all required
 # passed" vacuous — the same hole this script closes. Use ci-evidence.sh on such a base.
-# LIMITATION: reads rulesets only, not classic branch protection.
+# CLASSIC PROTECTION TOO. `/rules/branches/` returns [] under classic protection, so the
+# required set also takes `.protection.required_status_checks.checks` of `branches/<base>`
+# (read access suffices). app_id -1/null there means any app.
 #
 # EXIT CODES — only 0 is a pass:
 #   0  GREEN
@@ -53,7 +65,9 @@
 # Fixture dir contents:
 #   pr.json          {"headRefOid":..., "baseRefName":...} from `gh pr view --json`
 #   rules.json       `gh api repos/O/R/rules/branches/<base>` output
-#   check-runs.json  array of check runs (`.check_runs[]` of commits/<sha>/check-runs, all pages)
+#   branch.json      `gh api repos/O/R/branches/<base>` output; optional, defaults to {}
+#   check-runs.json  array of check-run-shaped rows {id, name, status, conclusion, app.id}; the
+#                    live path builds them from Actions jobs at the head (app.id 15368)
 #   statuses.json    array of statuses (`.statuses[]` of commits/<sha>/status); optional
 #   pr-after.json    the end-of-run head re-read; optional, defaults to pr.json
 set -uo pipefail
@@ -68,7 +82,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --repo)    need_value --repo $#; REPO="$2"; shift 2 ;;
     --json)    JSON=1; shift ;;
-    -h|--help) sed -n '2,58p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,61p' "$0"; exit 0 ;;
     -*)        echo "unknown flag: $1" >&2; exit 2 ;;
     *)         PR="$1"; shift ;;
   esac
@@ -96,6 +110,7 @@ if [ -n "$FIX" ]; then
   read_pr()       { cat "$FIX/pr.json" 2>/dev/null; }
   read_pr_after() { if [ -f "$FIX/pr-after.json" ]; then cat "$FIX/pr-after.json"; else read_pr; fi; }
   read_rules()    { cat "$FIX/rules.json" 2>/dev/null; }
+  read_branch()   { if [ -f "$FIX/branch.json" ]; then cat "$FIX/branch.json"; else echo '{}'; fi; }
   read_runs()     { cat "$FIX/check-runs.json" 2>/dev/null; }
   read_statuses() { if [ -f "$FIX/statuses.json" ]; then cat "$FIX/statuses.json"; else echo '[]'; fi; }
 else
@@ -107,9 +122,32 @@ else
   read_pr()       { gh pr view "$PR" --repo "$REPO" --json headRefOid,baseRefName 2>/dev/null; }
   read_pr_after() { read_pr; }
   read_rules()    { gh api "repos/$REPO/rules/branches/$1" 2>/dev/null; }
-  # --paginate emits one document per page; slurp the per-page arrays into one array.
-  read_runs()     { gh api --paginate "repos/$REPO/commits/$HEAD/check-runs?per_page=100" \
-                      --jq '.check_runs' 2>/dev/null | jq -s 'add // []'; }
+  read_branch()   { gh api "repos/$REPO/branches/$1" 2>/dev/null; }
+  # Actions jobs at the head, as check-run-shaped rows of the Actions app (15368). Not the
+  # check-runs API: a fine-grained PAT cannot hold Checks permission (dev-box, 2026-10-29).
+  # A run with no jobs yet adds a placeholder that matches no context but counts as running.
+  # Payloads go through stdin, never argv: one private repo's head run list was 177 KB, over Linux's
+  # 128 KB limit on a single argument, and jq --argjson failed with E2BIG (dev-box, 2026-10-29).
+  read_runs() {
+    local runs id one jobs=""
+    runs="$(gh api --paginate --slurp "repos/$REPO/actions/runs?head_sha=$HEAD&per_page=100" 2>/dev/null \
+      | jq -c '[ .[].workflow_runs[] | {id, name, status} ]')" && [ -n "$runs" ] || return 1
+    for id in $(jq -r '.[].id' <<<"$runs"); do
+      one="$(gh api --paginate --slurp "repos/$REPO/actions/runs/$id/jobs?filter=latest&per_page=100" \
+        2>/dev/null | jq -c --argjson rid "$id" \
+          '{rid: $rid, jobs: [ .[].jobs[] | {id, name, status, conclusion, completed_at} ]}')" \
+        && [ -n "$one" ] || return 1
+      jobs+="$one"$'\n'
+    done
+    # Input: the run list, then one {rid, jobs} object per run.
+    printf '%s\n%s' "$runs" "$jobs" | jq -cs '
+      .[0] as $runs
+      | [ .[1:][] as $r | ($runs[] | select(.id == $r.rid)) as $run
+          | if ($r.jobs | length) == 0 and ($run.status // "") != "completed"
+            then {id: 0, name: ("run: " + ($run.name // "?")), status: $run.status,
+                  conclusion: null, app: {id: 15368}}
+            else $r.jobs[] + {app: {id: 15368}} end ]'
+  }
   read_statuses() { gh api --paginate "repos/$REPO/commits/$HEAD/status?per_page=100" \
                       --jq '.statuses' 2>/dev/null | jq -s 'add // []'; }
 fi
@@ -121,13 +159,17 @@ BASE="$(jq -r '.baseRefName // empty' <<<"$PRJ" 2>/dev/null)"
 [ -n "$BASE" ] || indeterminate "PR #$PR base branch unreadable"
 
 RULES="$(read_rules "$BASE")" || indeterminate "cannot read rulesets for $BASE"
-REQUIRED="$(jq -c '
-  [ .[] | select(.type == "required_status_checks")
+BRANCH="$(read_branch "$BASE")" || indeterminate "cannot read branch protection for $BASE"
+REQUIRED="$(jq -nc --argjson rules "$RULES" --argjson branch "$BRANCH" '
+  ( [ $rules[] | select(.type == "required_status_checks")
         | .parameters.required_status_checks[]
-        | {context, integration_id: (.integration_id // null)} ] | unique' <<<"$RULES" 2>/dev/null)" \
-  || indeterminate "rulesets payload for $BASE is malformed"
+        | {context, integration_id: (.integration_id // null)} ]
+  + [ ($branch.protection.required_status_checks.checks // [])[]
+        | {context, integration_id: (if (.app_id // -1) < 0 then null else .app_id end)} ]
+  ) | unique' 2>/dev/null)" \
+  || indeterminate "rulesets or branch payload for $BASE is malformed"
 [ "$(jq 'length' <<<"$REQUIRED")" -gt 0 ] \
-  || indeterminate "no required status checks in any ruleset on $BASE — 'all required passed' would be vacuous; use ci-evidence.sh"
+  || indeterminate "no required status checks in any ruleset or classic protection on $BASE — 'all required passed' would be vacuous; use ci-evidence.sh"
 
 RUNS="$(read_runs)" || indeterminate "cannot read check runs at ${HEAD:0:12}"
 STATUSES="$(read_statuses)" || indeterminate "cannot read commit statuses at ${HEAD:0:12}"
@@ -153,6 +195,8 @@ ROWS="$(jq -c --argjson runs "$RUNS" --argjson sts "$STATUSES" '
       | { context: $req.context,
           state: (if $run != null then ($run | run_state)
                   elif $st != null then ($st | status_state)
+                  elif $req.integration_id != null and $req.integration_id != 15368 then "unobservable"
+                  elif $req.integration_id == null then "unmapped"
                   else "missing" end) })' <<<"$REQUIRED")" \
   || indeterminate "could not evaluate required contexts"
 
@@ -176,8 +220,14 @@ fi
 if [ "$(count running)" -gt 0 ]; then
   emit PENDING "$(count running) of $TOTAL required context(s) running: $(names running) $AT" "$ROWS"; exit 1
 fi
-if [ "$(count missing)" -gt 0 ] && [ "$ANY_RUNNING" = true ]; then
-  emit PENDING "$(count missing) of $TOTAL required context(s) not created yet while other runs are in flight: $(names missing) $AT" "$ROWS"; exit 1
+if [ "$(( $(count missing) + $(count unmapped) ))" -gt 0 ] && [ "$ANY_RUNNING" = true ]; then
+  emit PENDING "$(( $(count missing) + $(count unmapped) )) of $TOTAL required context(s) not created yet while other runs are in flight: $(jq -r '[.[] | select(.state == "missing" or .state == "unmapped") | .context] | join(", ")' <<<"$ROWS") $AT" "$ROWS"; exit 1
+fi
+if [ "$(count unobservable)" -gt 0 ]; then
+  emit INDETERMINATE "required context(s) owned by a non-Actions app cannot be read without Checks permission: $(names unobservable) $AT" "$ROWS"; exit 3
+fi
+if [ "$(count unmapped)" -gt 0 ]; then
+  emit INDETERMINATE "no Actions job or commit status matches required context(s) $(names unmapped) $AT — a non-Actions check run cannot be read without Checks permission" "$ROWS"; exit 3
 fi
 if [ "$(count missing)" -gt 0 ]; then
   emit UNTRIGGERED "$(count missing) required contexts have no run: $(names missing) $AT — stale branch: rebase onto $BASE; Actions outage: wait (githubstatus.com); never --admin" "$ROWS"; exit 1

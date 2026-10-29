@@ -35,6 +35,11 @@ bash "$POST" 999 --from "$TMP/open.json" --dry-run --head "$HEAD" --files "scrip
 case "$(cat "$TMP/open.md")" in *'`scripts/a.py:320`'*"CHANGES REQUESTED"*|*"CHANGES REQUESTED"*'`scripts/a.py:320`'*) ok "open: cites path:line, verdict CHANGES REQUESTED" ;; *) bad "open body: $(cat "$TMP/open.md")" ;; esac
 gate "$TMP/open.md"; expect "$RC" 0 "open: gate still sees a review body at head"
 
+# 2b. only unverified findings → verdict APPROVE, but the misquoted finding is still listed
+printf '{"findings":[],"unverified_findings":[{"title":"Every scope fails","priority":"P1","code_location":{"file_path":"scripts/a.py","line":12},"verification":"quoted_code not found"}],"overall_correctness":"patch is correct","overall_explanation":"Moved 1 finding."}' > "$TMP/unverified.json"
+bash "$POST" 999 --from "$TMP/unverified.json" --dry-run --head "$HEAD" --files "scripts/a.py" > "$TMP/unverified.md"; expect "$?" 0 "unverified: dry-run exits 0"
+case "$(cat "$TMP/unverified.md")" in *"Verdict: APPROVE"*"[UNVERIFIED P1] \`scripts/a.py:12\`"*) ok "unverified: listed, not counted as open" ;; *) bad "unverified body: $(cat "$TMP/unverified.md")" ;; esac
+
 # 3. refusals
 bash "$POST" 999 --from "$TMP/missing.json" --dry-run --head "$HEAD" --files a >/dev/null 2>&1; expect "$?" 1 "refuse: missing json"
 printf 'not json' > "$TMP/bad.json"; bash "$POST" 999 --from "$TMP/bad.json" --dry-run --head "$HEAD" --files a >/dev/null 2>&1; expect "$?" 1 "refuse: malformed json"

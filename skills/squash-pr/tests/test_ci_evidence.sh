@@ -115,6 +115,38 @@ else
 fi
 
 # ── 10. Healthy PRs are not disturbed ────────────────────────────────────
+# Live path, not the fixture. A fine-grained PAT cannot hold Checks permission, so the live
+# path must read Actions runs at the head and never statusCheckRollup or check-runs (dev-box,
+# 2026-10-26..29: the squash loop skipped every PR behind "cannot read statusCheckRollup").
+# FAKE_RUNS_MODE: ok | forbidden | 502. The fake fails any call that touches the Checks API.
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in *statusCheckRollup*|*check-runs*) echo "Checks API called: $*" >&2; exit 97 ;; esac
+if [ "$1 $2" = "pr view" ]; then printf '%s\n' "$(printf 'a%.0s' $(seq 1 40))"; exit 0; fi
+if [ "$1" = api ] && [[ "$*" == *actions/runs?head_sha=* ]]; then
+  case "${FAKE_RUNS_MODE:-ok}" in
+    forbidden) echo 'HTTP 403: Resource not accessible by personal access token' >&2; exit 1 ;;
+    502) echo 'HTTP 502: Bad Gateway' >&2; exit 1 ;;
+  esac
+  echo '[{"workflow_runs":[{"name":"CI","status":"completed","conclusion":"success","html_url":"https://github.com/o/r/actions/runs/11"},{"name":"Lint","status":"completed","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/12"},{"name":"Preview","status":"completed","conclusion":"skipped","html_url":"https://github.com/o/r/actions/runs/13"}]}]'
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2; exit 64
+EOF
+chmod +x "$TMP/bin/gh"
+OUT="$(PATH="$TMP/bin:$PATH" bash "$GUARD" 999 --repo o/r --min 2 2>&1)"; RC=$?
+expect "$RC" 0 "live path counts Actions runs at the head (2 ran, 1 skipped) => CI_RAN"
+contains "$OUT" "CI, Lint" "live path names the workflow runs it counted"
+OUT="$(PATH="$TMP/bin:$PATH" bash "$GUARD" 999 --repo o/r --min 3 2>&1)"; RC=$?
+expect "$RC" 1 "a skipped run is not evidence on the live path => CI_ABSENT"
+OUT="$(FAKE_RUNS_MODE=forbidden PATH="$TMP/bin:$PATH" bash "$GUARD" 999 --repo o/r 2>&1)"; RC=$?
+expect "$RC" 3 "token without Actions: Read => INDETERMINATE (exit 3)"
+contains "$OUT" "token lacks Actions:read" "names the missing token permission"
+OUT="$(FAKE_RUNS_MODE=502 PATH="$TMP/bin:$PATH" bash "$GUARD" 999 --repo o/r 2>&1)"; RC=$?
+expect "$RC" 3 "other gh failure => INDETERMINATE (exit 3)"
+case "$OUT" in *"token lacks"*) bad "a non-permission failure blamed the token" ;; *) ok "a non-permission failure does not blame the token" ;; esac
+
 run "$(mkfix healthy "$HEALTHY")"
 expect "$RC" 0 "healthy PR => CI_RAN"
 contains "$OUT" "Semantic Gate" "names the workflows that ran"
